@@ -26,10 +26,6 @@ func loadWordlist(filename string) ([]string, error) {
 	// Simple parsing: strings.Fields handles newlines and spaces automatically
 	words := strings.Fields(string(content))
 
-	if len(words) != 2048 {
-		return nil, fmt.Errorf("invalid wordlist size: %d. Expected 2048 words", len(words))
-	}
-
 	return words, nil
 }
 
