@@ -1,140 +1,106 @@
 package main
 
 import (
+	"bufio"
 	"crypto/rand"
 	"crypto/sha256"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
 // --- CORE LOGIC ---
 
-// loadWordlist reads the BIP-39 wordlist from a file and verifies its integrity
 func loadWordlist(filename string) ([]string, error) {
 	content, err := os.ReadFile(filename)
 	if err != nil {
 		return nil, err
 	}
-
-	// Verify integrity using SHA256
-	expectedHash := "2f5eed53a4727b4bf8880d8f3f199efc90e58503646d9ff8eff3a2ed3b24dbda"
-	if fmt.Sprintf("%x", sha256.Sum256(content)) != expectedHash {
-		return nil, fmt.Errorf("integrity check failed: wordlist modified")
+	// Verify SHA256 integrity
+	expected := "2f5eed53a4727b4bf8880d8f3f199efc90e58503646d9ff8eff3a2ed3b24dbda"
+	if fmt.Sprintf("%x", sha256.Sum256(content)) != expected {
+		return nil, fmt.Errorf("wordlist integrity failed")
 	}
-
-	// Simple parsing: strings.Fields handles newlines and spaces automatically
-	words := strings.Fields(string(content))
-
-	return words, nil
+	return strings.Fields(string(content)), nil
 }
 
-// generateEntropy generates cryptographically secure random bytes
-func generateEntropy(bitSize int) ([]byte, error) {
-	if bitSize%32 != 0 || bitSize < 128 || bitSize > 256 {
-		return nil, fmt.Errorf("invalid entropy size: %d", bitSize)
-	}
-	bytes := make([]byte, bitSize/8)
-	_, err := rand.Read(bytes)
-	if err != nil {
-		return nil, err
-	}
-	return bytes, nil
-}
-
-// generateMnemonic creates a BIP-39 mnemonic from entropy
+// generateMnemonic converts 32-byte entropy to 24-word BIP-39 phrase
+// Specialized for 256-bit entropy (simplifies checksum logic)
 func generateMnemonic(entropy []byte, wordlist []string) (string, error) {
-	entBits := len(entropy) * 8
-	checksumBits := entBits / 32
+	if len(entropy) != 32 {
+		return "", fmt.Errorf("entropy must be 32 bytes")
+	}
 
-	// Calculate SHA256 hash
+	// 1. Calculate Checksum (First 8 bits of SHA256)
 	hash := sha256.Sum256(entropy)
+	checksumByte := hash[0]
 
-	// We use a simple bit string approach for clarity and correctness
-	// to avoid complex big.Int math that might be confusing to audit.
+	// 2. Convert to Bit String (Entropy + Checksum)
 	var bits strings.Builder
-
-	// 1. Convert Entropy to bits
 	for _, b := range entropy {
 		fmt.Fprintf(&bits, "%08b", b)
 	}
+	fmt.Fprintf(&bits, "%08b", checksumByte) // Append 8 bits checksum
 
-	// 2. Append Checksum bits
-	// Checksum is the first (ENT / 32) bits of the SHA256 hash.
-	for i := range checksumBits {
-		// Calculate which byte and bit index corresponds to the i-th bit
-		byteIdx := i / 8
-		bitIdx := 7 - (i % 8) // MSB first
-
-		// Extract the bit
-		if (hash[byteIdx]>>bitIdx)&1 == 1 {
-			bits.WriteRune('1')
-		} else {
-			bits.WriteRune('0')
-		}
-	}
-
+	// 3. Map 11-bit chunks to words
 	allBits := bits.String()
-	numWords := len(allBits) / 11
-	var mnemonicWords []string
+	var words []string
 
-	// 3. Split into 11-bit chunks and map to words
-	for i := range numWords {
-		start := i * 11
-		end := start + 11
-		chunk := allBits[start:end]
-
-		// Convert binary string chunk to integer index
-		var index int64
-		for _, c := range chunk {
-			index = index << 1
-			if c == '1' {
-				index |= 1
-			}
-		}
-
-		if index >= int64(len(wordlist)) {
-			return "", fmt.Errorf("wordlist index out of range")
-		}
-		mnemonicWords = append(mnemonicWords, wordlist[index])
+	for i := 0; i < len(allBits); i += 11 {
+		chunk := allBits[i : i+11]
+		idx, _ := strconv.ParseInt(chunk, 2, 64)
+		words = append(words, wordlist[idx])
 	}
 
-	return strings.Join(mnemonicWords, " "), nil
+	return strings.Join(words, " "), nil
 }
 
 // --- MAIN CLI ---
 
 func main() {
-	fmt.Println("--- SELA: Secure Encrypted Ledger Access ---")
-	fmt.Println("Component: Key Generator (sela-gen)")
-	fmt.Println("Security Level: MAXIMUM (256-bit Entropy / 24 Words)")
-	fmt.Println("Using crypto/rand for CSPRNG")
-	fmt.Println("-------------------------------------------")
+	fmt.Println("--- SELA: sela-gen (256-bit) ---")
 
-	// Look for wordlist in current directory
 	wordlist, err := loadWordlist("bip-39-english.txt")
 	if err != nil {
-		fmt.Printf("Error loading wordlist: %v\n", err)
-		fmt.Println("Ensure 'bip-39-english.txt' is in the current directory.")
+		fmt.Println("Error:", err)
 		os.Exit(1)
 	}
 
-	// Strict enforcement: Only 256-bit entropy (24 words)
-	entropy256, err := generateEntropy(256)
+	fmt.Print("Mode [1=System RNG, 2=Dice]: ")
+	var choice string
+	fmt.Scanln(&choice)
+
+	var entropy []byte
+
+	if choice == "2" {
+		for {
+			fmt.Print("Enter dice rolls (min 100 digits, 1-6): ")
+			reader := bufio.NewReader(os.Stdin)
+			input, _ := reader.ReadString('\n')
+			rolls := strings.TrimSpace(input)
+
+			if len(rolls) < 100 {
+				fmt.Println("Error: Need >= 100 rolls")
+				continue
+			}
+
+			// Whiten with SHA256
+			hash := sha256.Sum256([]byte(rolls))
+			entropy = hash[:]
+			break
+		}
+	} else {
+		entropy = make([]byte, 32)
+		rand.Read(entropy)
+	}
+
+	mnemonic, err := generateMnemonic(entropy, wordlist)
 	if err != nil {
-		fmt.Printf("Error generating entropy: %v\n", err)
+		fmt.Println("Error:", err)
 		os.Exit(1)
 	}
 
-	mnemonic24, err := generateMnemonic(entropy256, wordlist)
-	if err != nil {
-		fmt.Printf("Error generating mnemonic: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Println("\n[24 Words - 256-bit Entropy]")
-	fmt.Println(mnemonic24)
-
-	fmt.Println("\n-------------------------------------------")
-	fmt.Println("KEEP THESE WORDS SAFE. DO NOT SHARE THEM OR COPY TO ONLINE DEVICE")
+	fmt.Printf("\n--- This is Your Mnemonic Phrase ---\n\n%s\n\n", mnemonic)
+	fmt.Println("KEEP SAFE AND OFFLINE ONLY.")
 }

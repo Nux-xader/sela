@@ -20,11 +20,12 @@ SELA is not a monolithic application. It is a suite of two strictly isolated too
 
 ## Honest Security: Our Trust Hierarchy
 
-We do not claim "Trust No One" because that is technically impossible (we must trust the hardware). Instead, we offer a transparent **Trust Hierarchy**:
+We do not claim "Trust No One" because that is technically impossible. Instead, we offer a transparent **Trust Hierarchy** with options for the extremely paranoid.
 
-1.  **Hardware & OS**: We trust the CPU and Kernel to execute instructions and provide entropy.
-2.  **Compiler**: We trust the official Go Toolchain and Standard Library.
-3.  **YOU**: We design the code so **you** can audit it.
+1.  **Hardware**: We trust the CPU to execute instructions correctly.
+2.  **Compiler**: We trust the official Go Toolchain.
+3.  **OS Kernel**: Trusted for RNG in *Standard Mode*. **BYPASSED** in *Dice Mode*.
+4.  **YOU**: We design the code so **you** can audit it.
 
 **We DO NOT trust:**
 *   NPM/Cargo/Go Module ecosystems.
