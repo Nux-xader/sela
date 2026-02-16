@@ -92,7 +92,11 @@ func main() {
 		}
 	} else {
 		entropy = make([]byte, 32)
-		rand.Read(entropy)
+		_, err := rand.Read(entropy)
+		if err != nil {
+			fmt.Println("CRITICAL: System RNG failed:", err)
+			os.Exit(1)
+		}
 	}
 
 	mnemonic, err := generateMnemonic(entropy, wordlist)
