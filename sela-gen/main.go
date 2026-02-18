@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -61,7 +62,7 @@ func generateMnemonic(entropy []byte, wordlist []string) (string, error) {
 func main() {
 	fmt.Println("--- SELA: sela-gen (256-bit) ---")
 
-	wordlist, err := loadWordlist("bip-39-english.txt")
+	wordlist, err := loadWordlist("../bip-39-english.txt")
 	if err != nil {
 		fmt.Println("Error:", err)
 		os.Exit(1)
@@ -92,8 +93,7 @@ func main() {
 		}
 	} else {
 		entropy = make([]byte, 32)
-		_, err := rand.Read(entropy)
-		if err != nil {
+		if _, err := io.ReadFull(rand.Reader, entropy); err != nil {
 			fmt.Println("CRITICAL: System RNG failed:", err)
 			os.Exit(1)
 		}

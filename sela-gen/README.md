@@ -59,6 +59,8 @@ We **refuse** to trust the chaotic ecosystem of third-party libraries:
 ### Interactive Mode (Recommended)
 Simply run the program and follow the prompts. You can choose between System RNG and Dice Rolls.
 
+**Note**: The tool expects `bip-39-english.txt` to be in the project root (one level up).
+
 ```bash
 go run main.go
 ```
