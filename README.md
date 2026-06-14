@@ -59,3 +59,27 @@ sela/
    go run . init
    go run . address
    ```
+
+---
+
+## Security Best Practices: Address Verification
+
+To prevent loss of funds, you must verify derived addresses before sending transactions.
+
+### The Danger of Address Poisoning
+Many users only check the last few characters of an address. Hackers exploit this habit via **Address Poisoning Attacks**. Using vanity address generators, attackers can easily generate a matching prefix (e.g., `bc1q...`) and suffix (e.g., `...kug6`) to match your legitimate address. They then send a zero-value transaction to your wallet so that the malicious address appears in your transaction history, hoping you will copy-paste it for your next transfer.
+
+### The "4-4-4" Verification Protocol
+To combat poisoning attacks and ensure transmission integrity, always verify your derived addresses using the **4-4-4 Rule**:
+1. **First 4 Characters**: Verify the 4 characters immediately following the standard network prefix (e.g., for `bc1q[zmtr]...`, check `zmtr`).
+2. **Middle 4 Characters**: Pick a random segment of 4 characters in the middle of the address (e.g., `...[csse]...`).
+3. **Last 4 Characters**: Verify the final 4 characters of the address (e.g., `...[kug6]`).
+
+### Why This Protocol Protects You
+* **Cryptographic Spoofing Defense**: Generating a vanity address that matches the prefix, suffix, and a specific middle sequence of another address requires finding a collision across 12 specific characters. This is computationally infeasible in real-time.
+* **Human-Error Prevention**: While inspecting 12 characters protects against spoofing, typos are handled automatically by the protocol.
+
+> [!WARNING]
+> **Bech32 Native Integrity Protection:**
+> Bitcoin's Bech32 (BIP-173) address format includes a built-in BCH checksum. If even a single character is mistyped or corrupted during manual entry, copy-pasting, or QR scanning, compliant wallets and transaction builders will **automatically reject** the address as invalid. Funds cannot be broadcast to a corrupted Bech32 address. The 4-4-4 check is primarily to prevent sending to a *different, valid* address (poisoning) rather than detecting typos, which the protocol handles automatically.
+

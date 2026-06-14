@@ -59,3 +59,9 @@ Run unit tests to verify the correctness of the derivation logic against standar
 ```bash
 go test -v ./...
 ```
+
+---
+
+## Address Verification Security
+
+Before sending any transactions, always verify your derived addresses. To protect against Address Poisoning and other errors, follow the **4-4-4 Verification Protocol** detailed in the [root README.md](../README.md#security-best-practices-address-verification).
