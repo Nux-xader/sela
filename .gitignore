@@ -1,0 +1,30 @@
+# Binaries and executable files
+sela-gen/sela-gen
+sela-vault/sela-vault
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binaries
+*.test
+*.out
+
+# SELA Vault files (sensitive data - MUST NEVER BE COMMITTED)
+*.sela
+vault.sela
+sela-vault/vault.sela
+
+# IDEs and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Claude settings directory
+.claude/
