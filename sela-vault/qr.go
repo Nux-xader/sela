@@ -6,45 +6,28 @@ import (
 	"rsc.io/qr"
 )
 
-// printQR prints a QR Code to the terminal using Unicode half-block characters.
-// It uses ANSI escape codes to ensure correct contrast on both light and dark terminal themes.
+// printQR prints a QR Code to the terminal.
+// It uses ANSI escape codes to ensure correct contrast (black background, white foreground)
+// across both light and dark terminal themes, using two characters per module to keep it square.
 func printQR(text string) error {
 	code, err := qr.Encode(text, qr.L)
 	if err != nil {
 		return err
 	}
 
-	size := code.Size
-	border := 4 // Standard QR code quiet zone is 4 modules
-
-	isBlack := func(x, y int) bool {
-		// Quiet zone must be white (light)
-		if x < 0 || x >= size || y < 0 || y >= size {
-			return false
-		}
-		return code.Black(x, y)
-	}
-
-	// Force black background (\033[40m) and white foreground (\033[97m)
+	// Set terminal background to black (\033[40m) and foreground to white (\033[97m)
 	fmt.Print("\033[40m\033[97m")
 
-	for y := -border; y < size+border; y += 2 {
-		for x := -border; x < size+border; x++ {
-			topBlack := isBlack(x, y)
-			bottomBlack := isBlack(x, y+1)
-
-			// Map top and bottom pixels to terminal characters:
-			// - White (light) pixel -> foreground (solid block)
-			// - Black (dark) pixel -> background (empty space)
-			if !topBlack && !bottomBlack {
-				fmt.Print("\u2588") // Both white (█)
-			} else if !topBlack && bottomBlack {
-				fmt.Print("\u2580") // Top white, bottom black (▀)
-			} else if topBlack && !bottomBlack {
-				fmt.Print("\u2584") // Top black, bottom white (▄)
-			} else {
-				fmt.Print(" ") // Both black (space)
+	border := 2
+	for y := -border; y < code.Size+border; y++ {
+		for x := -border; x < code.Size+border; x++ {
+			// Check if pixel is inside boundaries and is black
+			isBlack := x >= 0 && x < code.Size && y >= 0 && y < code.Size && code.Black(x, y)
+			if isBlack {
+				fmt.Print("  ")         // Black module (empty space)
+				continue
 			}
+			fmt.Print("\u2588\u2588") // White module (solid block)
 		}
 		fmt.Println()
 	}
