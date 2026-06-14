@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/Nux-xader/sela/sela-vault/bip"
 	"golang.org/x/crypto/pbkdf2"
 )
 
@@ -40,7 +41,7 @@ type Vault struct {
 
 // EncryptMnemonic creates a new encrypted vault struct from a mnemonic and password.
 // It performs heavy computation (PBKDF2) to derive the encryption key.
-func EncryptMnemonic(mnemonic string, password []byte) (*Vault, error) {
+func EncryptMnemonic(mnemonic []byte, password []byte) (*Vault, error) {
 	// 1. Generate Random Salt
 	salt := make([]byte, SaltSize)
 	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
@@ -49,6 +50,7 @@ func EncryptMnemonic(mnemonic string, password []byte) (*Vault, error) {
 
 	// 2. Derive Key from Password
 	key := pbkdf2.Key(password, salt, KDFIterations, KeySize, sha512.New)
+	defer bip.WipeBytes(key)
 
 	// 3. Initialize AES-GCM
 	block, err := aes.NewCipher(key)
@@ -68,7 +70,7 @@ func EncryptMnemonic(mnemonic string, password []byte) (*Vault, error) {
 	}
 
 	// 5. Encrypt (Seal)
-	ciphertext := gcm.Seal(nil, nonce, []byte(mnemonic), nil)
+	ciphertext := gcm.Seal(nil, nonce, mnemonic, nil)
 
 	// 6. Construct Vault Struct
 	v := &Vault{}
@@ -111,27 +113,29 @@ func LoadVault() (*Vault, error) {
 }
 
 // DecryptMnemonic decrypts the mnemonic from the vault using the provided password.
-func (v *Vault) DecryptMnemonic(password []byte) (string, error) {
+// It returns a byte slice so that the decrypted mnemonic can be securely zeroed out (wiped) in RAM when done.
+func (v *Vault) DecryptMnemonic(password []byte) ([]byte, error) {
 	// 1. Re-derive Key from Password
 	key := pbkdf2.Key(password, v.KDF.Salt, v.KDF.Iterations, KeySize, sha512.New)
+	defer bip.WipeBytes(key)
 
 	// 2. Initialize AES-GCM
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return "", errors.New("failed to create aes cipher for decryption: " + err.Error())
+		return nil, errors.New("failed to create aes cipher for decryption: " + err.Error())
 	}
 
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return "", errors.New("failed to create gcm for decryption: " + err.Error())
+		return nil, errors.New("failed to create gcm for decryption: " + err.Error())
 	}
 
 	// 3. Decrypt (Open)
 	// The original mnemonic was sealed with nil additional data, so we pass nil here too.
 	plaintext, err := gcm.Open(nil, v.Cipher.Nonce, v.Cipher.Data, nil)
 	if err != nil {
-		return "", errors.New("failed to decrypt mnemonic. Incorrect password or corrupted vault: " + err.Error())
+		return nil, errors.New("failed to decrypt mnemonic. Incorrect password or corrupted vault: " + err.Error())
 	}
 
-	return string(plaintext), nil
+	return plaintext, nil
 }
