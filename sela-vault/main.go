@@ -200,5 +200,8 @@ func cmdAddress() error {
 
 	// 6. Print Address
 	fmt.Printf("\nDerived BIP-84 Address (Index %d/m/84'/0'/0'/0/%d):\n%s\n", index, index, address)
+	if err := printQR(address); err != nil {
+		fmt.Printf("Warning: Could not generate QR Code: %v\n", err)
+	}
 	return nil
 }
