@@ -81,5 +81,6 @@ To combat poisoning attacks and ensure transmission integrity, always verify you
 
 > [!WARNING]
 > **Bech32 Native Integrity Protection:**
-> Bitcoin's Bech32 (BIP-173) address format includes a built-in BCH checksum. If even a single character is mistyped or corrupted during manual entry, copy-pasting, or QR scanning, compliant wallets and transaction builders will **automatically reject** the address as invalid. Funds cannot be broadcast to a corrupted Bech32 address. The 4-4-4 check is primarily to prevent sending to a *different, valid* address (poisoning) rather than detecting typos, which the protocol handles automatically.
+> Bitcoin's Bech32 (BIP-173) address format includes a built-in BCH (Bose-Chaudhuri-Hocquenghem) checksum. If even a single character is mistyped or corrupted during manual entry, copy-pasting, or QR scanning, compliant wallets and transaction builders will **automatically reject** the address as invalid. Funds cannot be broadcast to a corrupted Bech32 address. The 4-4-4 check is primarily to prevent sending to a *different, valid* address (poisoning) rather than detecting typos, which the protocol handles automatically.
+
 
