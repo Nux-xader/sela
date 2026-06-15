@@ -105,6 +105,13 @@ func cmdInit() error {
 	}
 	defer bip.WipeBytes(inputBytes)
 
+	// Instantly clear the screen and scrollback buffer to hide cleartext mnemonic
+	fmt.Print("\033[H\033[2J\033[3J")
+
+	// Reprint clean vault init context
+	fmt.Println("=== SELA VAULT INIT ===")
+	fmt.Println("Mnemonic: [HIDDEN FOR SECURITY]")
+
 	mnemonicBytes := bytes.TrimSpace(inputBytes)
 
 	// 3. Validation & Encryption (Immediate processing)
@@ -194,6 +201,8 @@ func cmdAddress() error {
 	// 5. Generate address
 	fmt.Println("Deriving keys and generating address...")
 	address, err := bip.DeriveBIP84Address(mnemonicBytes, passphraseBytes, index)
+	bip.WipeBytes(mnemonicBytes)     // Wipe mnemonic immediately after derivation
+	bip.WipeBytes(passphraseBytes)   // Wipe passphrase immediately after derivation
 	if err != nil {
 		return fmt.Errorf("deriving address: %w", err)
 	}
