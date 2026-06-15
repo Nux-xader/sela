@@ -4,23 +4,24 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
-	"crypto/sha512"
 	"encoding/json"
 	"errors"
 	"io"
 	"os"
 
 	"github.com/Nux-xader/sela/sela-vault/bip"
-	"golang.org/x/crypto/pbkdf2"
+	"golang.org/x/crypto/argon2"
 )
 
 // Constants for crypto parameters
 const (
-	KDFIterations  = 1_000_000
-	SaltSize       = 64 // Increased to 64 bytes (512 bits) to match SHA-512 output & hedge against weak RNG
+	KDFTime        = 1          // Number of passes/iterations
+	KDFMemory      = 512 * 1024 // 512 MB in KiB (maximum standard option)
+	KDFThreads     = 4          // Parallelism (number of threads)
+	SaltSize       = 64         // Increased to 64 bytes (512 bits) to match SHA-512 output & hedge against weak RNG
 	NonceSize      = 12
 	KeySize        = 32
-	KDFAlgo        = "pbkdf2-hmac-sha512"
+	KDFAlgo        = "argon2id"
 	CipherAlgo     = "aes-256-gcm"
 	DefaultKeyFile = "vault.sela"
 )
@@ -28,9 +29,11 @@ const (
 // Vault represents the encrypted storage format on disk.
 type Vault struct {
 	KDF struct {
-		Algorithm  string `json:"algorithm"`
-		Iterations int    `json:"iterations"`
-		Salt       []byte `json:"salt"`
+		Algorithm   string `json:"algorithm"`
+		Iterations  uint32 `json:"iterations"`  // Represents KDFTime for Argon2id
+		Memory      uint32 `json:"memory"`      // Memory in KiB (Argon2id only)
+		Parallelism uint8  `json:"parallelism"` // Parallelism (Argon2id only)
+		Salt        []byte `json:"salt"`
 	} `json:"kdf"`
 	Cipher struct {
 		Algorithm string `json:"algorithm"`
@@ -40,7 +43,7 @@ type Vault struct {
 }
 
 // EncryptMnemonic creates a new encrypted vault struct from a mnemonic and password.
-// It performs heavy computation (PBKDF2) to derive the encryption key.
+// It performs heavy computation (Argon2id) to derive the encryption key.
 func EncryptMnemonic(mnemonic []byte, password []byte) (*Vault, error) {
 	// 1. Generate Random Salt
 	salt := make([]byte, SaltSize)
@@ -49,7 +52,7 @@ func EncryptMnemonic(mnemonic []byte, password []byte) (*Vault, error) {
 	}
 
 	// 2. Derive Key from Password
-	key := pbkdf2.Key(password, salt, KDFIterations, KeySize, sha512.New)
+	key := argon2.IDKey(password, salt, KDFTime, KDFMemory, KDFThreads, KeySize)
 	defer bip.WipeBytes(key)
 
 	// 3. Initialize AES-GCM
@@ -75,7 +78,9 @@ func EncryptMnemonic(mnemonic []byte, password []byte) (*Vault, error) {
 	// 6. Construct Vault Struct
 	v := &Vault{}
 	v.KDF.Algorithm = KDFAlgo
-	v.KDF.Iterations = KDFIterations
+	v.KDF.Iterations = KDFTime
+	v.KDF.Memory = KDFMemory
+	v.KDF.Parallelism = KDFThreads
 	v.KDF.Salt = salt
 
 	v.Cipher.Algorithm = CipherAlgo
@@ -116,7 +121,7 @@ func LoadVault() (*Vault, error) {
 // It returns a byte slice so that the decrypted mnemonic can be securely zeroed out (wiped) in RAM when done.
 func (v *Vault) DecryptMnemonic(password []byte) ([]byte, error) {
 	// 1. Re-derive Key from Password
-	key := pbkdf2.Key(password, v.KDF.Salt, v.KDF.Iterations, KeySize, sha512.New)
+	key := argon2.IDKey(password, v.KDF.Salt, v.KDF.Iterations, v.KDF.Memory, v.KDF.Parallelism, KeySize)
 	defer bip.WipeBytes(key)
 
 	// 2. Initialize AES-GCM

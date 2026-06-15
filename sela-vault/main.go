@@ -201,14 +201,14 @@ func cmdAddress() error {
 	// 5. Generate address
 	fmt.Println("Deriving keys and generating address...")
 	address, err := bip.DeriveBIP84Address(mnemonicBytes, passphraseBytes, index)
-	bip.WipeBytes(mnemonicBytes)     // Wipe mnemonic immediately after derivation
-	bip.WipeBytes(passphraseBytes)   // Wipe passphrase immediately after derivation
+	bip.WipeBytes(mnemonicBytes)   // Wipe mnemonic immediately after derivation
+	bip.WipeBytes(passphraseBytes) // Wipe passphrase immediately after derivation
 	if err != nil {
 		return fmt.Errorf("deriving address: %w", err)
 	}
 
 	// 6. Print Address
-	fmt.Printf("\nDerived BIP-84 Address (Index %d/m/84'/0'/0'/0/%d):\n%s\n", index, index, address)
+	fmt.Printf("\nDerived BIP-84 Address (Index m/84'/0'/0'/0/%d):\n%s\n", index, address)
 	if err := printQR(address); err != nil {
 		fmt.Printf("Warning: Could not generate QR Code: %v\n", err)
 	}
