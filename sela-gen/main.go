@@ -166,8 +166,7 @@ func main() {
 	fmt.Println("KEEP SAFE AND OFFLINE ONLY.")
 
 	fmt.Print("\nPress [Enter] to clear terminal, wipe mnemonic from RAM, and exit...")
-	reader := bufio.NewReader(os.Stdin)
-	_, _ = reader.ReadBytes('\n')
+	bufio.NewReader(os.Stdin).ReadBytes('\n')
 
 	// Clear screen and scrollback buffer using ANSI escape codes
 	fmt.Print("\033[H\033[2J\033[3J")
