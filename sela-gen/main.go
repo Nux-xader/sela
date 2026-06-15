@@ -2,12 +2,13 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"fmt"
 	"io"
 	"os"
-	"strconv"
+	"runtime"
 	"strings"
 )
 
@@ -26,35 +27,59 @@ func loadWordlist(filename string) ([]string, error) {
 	return strings.Fields(string(content)), nil
 }
 
-// generateMnemonic converts 32-byte entropy to 24-word BIP-39 phrase
-// Specialized for 256-bit entropy (simplifies checksum logic)
-func generateMnemonic(entropy []byte, wordlist []string) (string, error) {
+// wipeBytes securely overwrites a byte slice with zeros to clear RAM trace.
+func wipeBytes(b []byte) {
+	if b == nil {
+		return
+	}
+	for i := range b {
+		b[i] = 0
+	}
+	runtime.KeepAlive(b)
+}
+
+// generateMnemonic converts 32-byte entropy to 24-word BIP-39 phrase.
+// It returns a byte slice so it can be wiped from memory after use.
+func generateMnemonic(entropy []byte, wordlist []string) ([]byte, error) {
 	if len(entropy) != 32 {
-		return "", fmt.Errorf("entropy must be 32 bytes")
+		return nil, fmt.Errorf("entropy must be 32 bytes")
 	}
 
 	// 1. Calculate Checksum (First 8 bits of SHA256)
 	hash := sha256.Sum256(entropy)
+	defer wipeBytes(hash[:]) // Zero-out intermediate hash in RAM
 	checksumByte := hash[0]
 
-	// 2. Convert to Bit String (Entropy + Checksum)
-	var bits strings.Builder
-	for _, b := range entropy {
-		fmt.Fprintf(&bits, "%08b", b)
+	// 2. Convert to Bit Array (Entropy + Checksum)
+	// Total bits = 256 + 8 = 264 bits
+	bits := make([]byte, 264)
+	defer wipeBytes(bits)
+
+	for i, b := range entropy {
+		for j := range 8 {
+			bits[i*8+j] = (b >> uint(7-j)) & 1
+		}
 	}
-	fmt.Fprintf(&bits, "%08b", checksumByte) // Append 8 bits checksum
+	for j := range 8 {
+		bits[256+j] = (checksumByte >> uint(7-j)) & 1
+	}
 
 	// 3. Map 11-bit chunks to words
-	allBits := bits.String()
-	var words []string
-
-	for i := 0; i < len(allBits); i += 11 {
-		chunk := allBits[i : i+11]
-		idx, _ := strconv.ParseInt(chunk, 2, 64)
-		words = append(words, wordlist[idx])
+	var words [][]byte
+	for i := 0; i < 264; i += 11 {
+		var idx int64
+		for j := range 11 {
+			idx = (idx << 1) | int64(bits[i+j])
+		}
+		words = append(words, []byte(wordlist[idx]))
 	}
 
-	return strings.Join(words, " "), nil
+	mnemonicBytes := bytes.Join(words, []byte(" "))
+	// Clean up intermediate word slices
+	for i := range words {
+		wipeBytes(words[i])
+	}
+	return mnemonicBytes, nil
 }
 
 // --- MAIN CLI ---
@@ -72,27 +97,53 @@ func main() {
 	var choice string
 	fmt.Scanln(&choice)
 
-	var entropy []byte
+	entropy := make([]byte, 32)
+	defer wipeBytes(entropy) // Backup cleanup
 
 	if choice == "2" {
 		for {
 			fmt.Print("Enter dice rolls (min 100 digits, 1-6): ")
-			reader := bufio.NewReader(os.Stdin)
-			input, _ := reader.ReadString('\n')
-			rolls := strings.TrimSpace(input)
 
-			if len(rolls) < 100 {
+			reader := bufio.NewReader(os.Stdin)
+			inputBytes, err := reader.ReadBytes('\n')
+
+			if err != nil {
+				fmt.Println("Error reading input:", err)
+				if inputBytes != nil {
+					wipeBytes(inputBytes)
+				}
+				continue
+			}
+			rollsBytes := bytes.TrimSpace(inputBytes)
+
+			if len(rollsBytes) < 100 {
 				fmt.Println("Error: Need >= 100 rolls")
+				wipeBytes(inputBytes)
+				continue
+			}
+
+			// SELA-01: Validate that all characters are digits 1-6
+			isValid := true
+			for _, b := range rollsBytes {
+				if b < '1' || b > '6' {
+					isValid = false
+					break
+				}
+			}
+			if !isValid {
+				fmt.Println("Error: Input must contain only digits between 1 and 6")
+				wipeBytes(inputBytes)
 				continue
 			}
 
 			// Whiten with SHA256
-			hash := sha256.Sum256([]byte(rolls))
-			entropy = hash[:]
+			hash := sha256.Sum256(rollsBytes)
+			copy(entropy, hash[:])
+			wipeBytes(hash[:]) // Wipe intermediate hash immediately
+			wipeBytes(inputBytes)
 			break
 		}
 	} else {
-		entropy = make([]byte, 32)
 		if _, err := io.ReadFull(rand.Reader, entropy); err != nil {
 			fmt.Println("CRITICAL: System RNG failed:", err)
 			os.Exit(1)
@@ -100,11 +151,24 @@ func main() {
 	}
 
 	mnemonic, err := generateMnemonic(entropy, wordlist)
+	wipeBytes(entropy) // Wipe entropy immediately after generation
 	if err != nil {
 		fmt.Println("Error:", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("\n--- This is Your Mnemonic Phrase ---\n\n%s\n\n", mnemonic)
+	fmt.Println("\n--- This is Your Mnemonic Phrase ---")
+	fmt.Println()
+	os.Stdout.Write(mnemonic)
+	wipeBytes(mnemonic)
+	fmt.Println()
+	fmt.Println()
 	fmt.Println("KEEP SAFE AND OFFLINE ONLY.")
+
+	fmt.Print("\nPress [Enter] to clear terminal, wipe mnemonic from RAM, and exit...")
+	reader := bufio.NewReader(os.Stdin)
+	_, _ = reader.ReadBytes('\n')
+
+	// Clear screen and scrollback buffer using ANSI escape codes
+	fmt.Print("\033[H\033[2J\033[3J")
 }
