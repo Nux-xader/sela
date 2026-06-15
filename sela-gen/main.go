@@ -38,6 +38,40 @@ func wipeBytes(b []byte) {
 	runtime.KeepAlive(b)
 }
 
+// readSecretLine reads a line from stdin byte-by-byte without internal buffering.
+// It returns a slice pointing to a pre-allocated buffer that can be securely wiped.
+func readSecretLine() ([]byte, error) {
+	buf := make([]byte, 1024)
+	var idx int
+	var b [1]byte
+	for {
+		n, err := os.Stdin.Read(b[:])
+		if n > 0 {
+			if b[0] == '\n' {
+				break
+			}
+			if b[0] == '\r' {
+				continue
+			}
+			if idx < len(buf) {
+				buf[idx] = b[0]
+				idx++
+			} else {
+				wipeBytes(buf)
+				return nil, fmt.Errorf("input too long")
+			}
+		}
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			wipeBytes(buf)
+			return nil, err
+		}
+	}
+	return buf[:idx], nil
+}
+
 // generateMnemonic converts 32-byte entropy to 24-word BIP-39 phrase.
 // It returns a byte slice so it can be wiped from memory after use.
 func generateMnemonic(entropy []byte, wordlist []string) ([]byte, error) {
@@ -65,13 +99,13 @@ func generateMnemonic(entropy []byte, wordlist []string) ([]byte, error) {
 	}
 
 	// 3. Map 11-bit chunks to words
-	var words [][]byte
+	words := make([][]byte, 24)
 	for i := 0; i < 264; i += 11 {
 		var idx int64
 		for j := range 11 {
 			idx = (idx << 1) | int64(bits[i+j])
 		}
-		words = append(words, []byte(wordlist[idx]))
+		words[i/11] = []byte(wordlist[idx])
 	}
 
 	mnemonicBytes := bytes.Join(words, []byte(" "))
@@ -104,8 +138,7 @@ func main() {
 		for {
 			fmt.Print("Enter dice rolls (min 100 digits, 1-6): ")
 
-			reader := bufio.NewReader(os.Stdin)
-			inputBytes, err := reader.ReadBytes('\n')
+			inputBytes, err := readSecretLine()
 
 			if err != nil {
 				fmt.Println("Error reading input:", err)
