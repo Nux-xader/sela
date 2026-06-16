@@ -2,10 +2,12 @@ package main
 
 import (
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"hash/crc32"
 	"strings"
 
-	"github.com/Nux-xader/sela/sela-vault/bip"
+	"github.com/Nux-xader/sela/sela-vault/util"
 )
 
 // bytewordsMinimalTable maps each byte (0x00-0xFF) to its 2-letter Bytewords Minimal representation (Uppercase).
@@ -89,10 +91,10 @@ func BuildCryptoAccountUR(masterFP uint32, accountPubKey []byte, accountChainCod
 	// Build origin keypath CBOR (Tag 304) dynamically based on accountIdx
 	keypathBytes := []byte{
 		0xd9, 0x01, 0x30, // Tag 304 prefix
-		0xa3,             // Map of 3 elements
-		0x01, 0x86,       // Key 1: components array (6 elements)
+		0xa3,       // Map of 3 elements
+		0x01, 0x86, // Key 1: components array (6 elements)
 		0x18, 0x54, 0xf5, // 84' -> [84, true]
-		coinByte, 0xf5,   // 0' or 1' -> [0 or 1, true]
+		coinByte, 0xf5, // 0' or 1' -> [0 or 1, true]
 	}
 	accountIdxBytes := encodeCBORUint(accountIdx)
 	keypathBytes = append(keypathBytes, accountIdxBytes...)
@@ -106,7 +108,7 @@ func BuildCryptoAccountUR(masterFP uint32, accountPubKey []byte, accountChainCod
 	)
 
 	// Clean up transient CBOR encoding slice
-	bip.WipeBytes(accountIdxBytes)
+	util.WipeBytes(accountIdxBytes)
 
 	// Build derived-key CBOR (Tag 303)
 	hdkeyBytes := []byte{
@@ -145,11 +147,38 @@ func BuildCryptoAccountUR(masterFP uint32, accountPubKey []byte, accountChainCod
 	encoded := encodeBytewordsMinimal(payload)
 
 	// Wipe all temporary byte slices containing key material from the memory heap
-	bip.WipeBytes(keypathBytes)
-	bip.WipeBytes(hdkeyBytes)
-	bip.WipeBytes(cborBytes)
-	bip.WipeBytes(payload)
-	bip.WipeBytes(masterFPBytes)
+	util.WipeBytes(keypathBytes)
+	util.WipeBytes(hdkeyBytes)
+	util.WipeBytes(cborBytes)
+	util.WipeBytes(payload)
+	util.WipeBytes(masterFPBytes)
 
 	return "UR:CRYPTO-ACCOUNT/" + encoded
+}
+
+var bytewordsReverseMap = initBytewordsDecoder()
+
+func initBytewordsDecoder() map[string]byte {
+	m := make(map[string]byte)
+	for i, word := range bytewordsMinimalTable {
+		m[word] = byte(i)
+	}
+	return m
+}
+
+// decodeBytewordsMinimal decodes a Bytewords Minimal string back to raw bytes.
+func decodeBytewordsMinimal(s string) ([]byte, error) {
+	if len(s)%2 != 0 {
+		return nil, errors.New("invalid Bytewords Minimal length")
+	}
+	data := make([]byte, len(s)/2)
+	for i := 0; i < len(s); i += 2 {
+		pair := s[i : i+2]
+		b, ok := bytewordsReverseMap[pair]
+		if !ok {
+			return nil, fmt.Errorf("invalid Bytewords Minimal pair: %s", pair)
+		}
+		data[i/2] = b
+	}
+	return data, nil
 }
