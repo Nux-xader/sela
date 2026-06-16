@@ -57,7 +57,8 @@ sela/
    ```bash
    cd sela-vault
    go run . init
-   go run . address
+   go run . addr
+   go run . pair
    ```
 
 ---

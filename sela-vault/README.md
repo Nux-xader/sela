@@ -4,9 +4,10 @@ This is the **Vault & Address Derivation** component of the SELA project. It sec
 
 ## What Does It Do?
 
-`sela-vault` provides two main capabilities:
-1.  **Initialize Vault (`init`)**: Accepts a 24-word mnemonic and encrypts it using heavy key derivation (PBKDF2) and AES-256-GCM. The encrypted payload is saved locally as `vault.sela`.
-2.  **Derive Address (`address`)**: Loads the vault, decrypts the mnemonic in-memory using your password, derives a BIP-84 Native Segwit address (`bc1q...`) for a specified index, and immediately wipes all secrets from RAM.
+`sela-vault` provides three main capabilities:
+1.  **Initialize Vault (`init`)**: Accepts a 24-word mnemonic and encrypts it using Argon2id for key derivation and AES-256-GCM. The encrypted payload is saved locally as `vault.sela`.
+2.  **Derive Address (`addr`)**: Loads the vault, decrypts the mnemonic in-memory, derives the BIP-84 Native Segwit address (`bc1q...` or `tb1q...`) at index 0, and immediately wipes all secrets from RAM.
+3.  **Generate Pairing QR (`pair`)**: Generates an optimized, uppercase `UR:CRYPTO-ACCOUNT/...` representation of the account extended public key (XPUB) for pairing with wallets like Sparrow Wallet.
 
 ---
 
@@ -14,8 +15,8 @@ This is the **Vault & Address Derivation** component of the SELA project. It sec
 
 ### 1. Encryption & Storage (`vault.go`)
 To protect against brute-force attacks on the vault file, we use heavy cryptographic parameters:
-*   **Key Derivation Function**: PBKDF2-HMAC-SHA512.
-*   **PBKDF2 Iterations**: 1,000,000.
+*   **Key Derivation Function**: Argon2id.
+*   **Argon2id Parameters**: Time/Passes = 1, Memory = 512 MB (512 * 1024 KiB), Parallelism/Threads = 4.
 *   **Salt Size**: 64 bytes (512 bits) of cryptographically secure random bytes (`crypto/rand`).
 *   **Encryption Cipher**: AES-256-GCM (Authenticated Encryption) with a unique 12-byte random nonce per save.
 
@@ -40,15 +41,25 @@ go run . init
 ```
 This generates the encrypted `vault.sela` file. **Keep this file offline.**
 
-### 2. Derive Native Segwit Address (`address`)
-Prompts for the wallet index (e.g., 0, 1, 2...), your optional BIP-39 passphrase (25th word), and your vault password to output the corresponding Bech32 address:
+### 2. Derive Native Segwit Address (`addr`)
+Prompts for your optional BIP-39 passphrase (25th word) and your vault password to output the corresponding Bech32 address at index 0 (supporting `--testnet` / `-testnet` flags):
 ```bash
-go run . address
+go run . addr
+# Or for testnet:
+go run . --testnet addr
 ```
 Outputs standard BIP-84 address:
 ```text
-Derived BIP-84 Address (Index 0/m/84'/0'/0'/0/0):
+Derived BIP-84 Address (Index m/84'/0'/0'/0/0):
 bc1qzmtrqsfuaf6l6kkcsseumq26ukaphfj9skkug6
+```
+
+### 3. Generate Pairing QR (`pair`)
+Prompts for your optional BIP-39 passphrase (25th word) and your vault password, then outputs a `ur:crypto-account` QR code for pairing with software wallets like Sparrow Wallet (supporting `--testnet` / `-testnet` flags):
+```bash
+go run . pair
+# Or for testnet:
+go run . --testnet pair
 ```
 
 ---
