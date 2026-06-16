@@ -4,24 +4,23 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
-	"slices"
 
 	"github.com/Nux-xader/sela/sela-vault/bip"
 	"golang.org/x/term"
 )
 
 func main() {
-	isTestnet := slices.Contains(os.Args, "--testnet") || slices.Contains(os.Args, "-testnet")
+	flag.Usage = printUsage
+	testnetPtr := flag.Bool("testnet", false, "Use Bitcoin Testnet")
+	accountPtr := flag.Uint("account", 0, "Specify BIP-44/84 account index")
+	flag.Parse()
 
-	var cmdArgs []string
-	for _, arg := range os.Args[1:] {
-		if arg == "--testnet" {
-			continue
-		}
-		cmdArgs = append(cmdArgs, arg)
-	}
+	isTestnet := *testnetPtr
+	accountIdx := uint32(*accountPtr)
+	cmdArgs := flag.Args()
 
 	if len(cmdArgs) < 1 {
 		printUsage()
@@ -33,9 +32,9 @@ func main() {
 	case "init":
 		err = cmdInit()
 	case "addr":
-		err = cmdAddr(isTestnet)
+		err = cmdAddr(isTestnet, accountIdx)
 	case "pair":
-		err = cmdPair(isTestnet)
+		err = cmdPair(isTestnet, accountIdx)
 	default:
 		fmt.Printf("Unknown command: %s\n", cmdArgs[0])
 		printUsage()
@@ -51,11 +50,12 @@ func main() {
 func printUsage() {
 	fmt.Println("Usage: sela-vault [flags] <command>")
 	fmt.Println("\nFlags:")
-	fmt.Println("  --testnet  Use Bitcoin Testnet (derives testnet keys and addresses)")
+	fmt.Println("  --testnet          Use Bitcoin Testnet (derives testnet keys and addresses)")
+	fmt.Println("  --account <index>  Specify BIP-44/84 account index (default: 0)")
 	fmt.Println("\nCommands:")
-	fmt.Println("  init       Encrypt a mnemonic into sela.vault")
-	fmt.Println("  addr       Derive the Native Segwit BIP-84 address from the vault")
-	fmt.Println("  pair       Generate a ur:crypto-account QR code for Sparrow pairing")
+	fmt.Println("  init               Encrypt a mnemonic into sela.vault")
+	fmt.Println("  addr               Derive the Native Segwit BIP-84 address from the vault")
+	fmt.Println("  pair               Generate a ur:crypto-account QR code for Sparrow pairing")
 }
 
 func cmdInit() error {
@@ -152,7 +152,7 @@ func cmdInit() error {
 	return nil
 }
 
-func cmdAddr(isTestnet bool) error {
+func cmdAddr(isTestnet bool, accountIdx uint32) error {
 	fmt.Println("=== SELA VAULT ADDRESS ===")
 
 	// Load Vault first (Fail-fast UX)
@@ -199,7 +199,7 @@ func cmdAddr(isTestnet bool) error {
 
 	// Generate address
 	fmt.Println("Deriving keys and generating address...")
-	address, err := bip.DeriveBIP84Address(mnemonicBytes, passphraseBytes, isTestnet)
+	address, err := bip.DeriveBIP84Address(mnemonicBytes, passphraseBytes, isTestnet, accountIdx)
 	bip.WipeBytes(mnemonicBytes)   // Wipe mnemonic immediately after derivation
 	bip.WipeBytes(passphraseBytes) // Wipe passphrase immediately after derivation
 	if err != nil {
@@ -207,18 +207,18 @@ func cmdAddr(isTestnet bool) error {
 	}
 
 	// Print Address
-	pathStr := "m/84'/0'/0'/0/0"
+	pathStr := fmt.Sprintf("m/84'/0'/%d'/0/0", accountIdx)
 	if isTestnet {
-		pathStr = "m/84'/1'/0'/0/0"
+		pathStr = fmt.Sprintf("m/84'/1'/%d'/0/0", accountIdx)
 	}
-	fmt.Printf("\nDerived BIP-84 Address (Index %s):\n%s\n", pathStr, address)
+	fmt.Printf("\nDerived BIP-84 Address (%s):\n%s\n", pathStr, address)
 	if err := printQR(address); err != nil {
 		fmt.Printf("Warning: Could not generate QR Code: %v\n", err)
 	}
 	return nil
 }
 
-func cmdPair(isTestnet bool) error {
+func cmdPair(isTestnet bool, accountIdx uint32) error {
 	fmt.Println("=== SELA VAULT PAIRING ===")
 
 	// Load Vault first (Fail-fast UX)
@@ -270,7 +270,7 @@ func cmdPair(isTestnet bool) error {
 	bip.WipeBytes(mnemonicBytes)   // Wipe mnemonic immediately after seed derivation
 	bip.WipeBytes(passphraseBytes) // Wipe passphrase immediately after seed derivation
 
-	deriv, err := bip.DeriveAccountDerivation(seed, isTestnet)
+	deriv, err := bip.DeriveAccountDerivation(seed, isTestnet, accountIdx)
 	bip.WipeBytes(seed) // Wipe seed immediately after derivation
 	if err != nil {
 		return fmt.Errorf("deriving account derivation: %w", err)
@@ -285,7 +285,7 @@ func cmdPair(isTestnet bool) error {
 	chainCode := deriv.AccountKey.ChainCode()
 
 	// Build UR string
-	urStr := BuildCryptoAccountUR(deriv.MasterFP, pubKeyBytes, chainCode, deriv.ParentFPBytes, isTestnet)
+	urStr := BuildCryptoAccountUR(deriv.MasterFP, pubKeyBytes, chainCode, deriv.ParentFPBytes, isTestnet, accountIdx)
 
 	fmt.Printf("\nGenerated ur:crypto-account URI:\n%s\n", urStr)
 	if err := printQR(urStr); err != nil {

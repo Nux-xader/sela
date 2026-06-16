@@ -15,9 +15,9 @@ type AccountDerivation struct {
 	AccountKey    *hdkeychain.ExtendedKey
 }
 
-// DeriveAccountDerivation derives the BIP-84 account key m/84'/(0'|1')/0' from seed.
+// DeriveAccountDerivation derives the BIP-84 account key m/84'/(0'|1')/accountIdx' from seed.
 // The caller is responsible for calling AccountKey.Zero() when finished.
-func DeriveAccountDerivation(seed []byte, isTestnet bool) (*AccountDerivation, error) {
+func DeriveAccountDerivation(seed []byte, isTestnet bool, accountIdx uint32) (*AccountDerivation, error) {
 	var netParams *chaincfg.Params
 	if isTestnet {
 		netParams = &chaincfg.TestNet3Params
@@ -39,13 +39,13 @@ func DeriveAccountDerivation(seed []byte, isTestnet bool) (*AccountDerivation, e
 	masterFPBytes := btcutil.Hash160(masterPub.SerializeCompressed())[:4]
 	masterFP := binary.BigEndian.Uint32(masterFPBytes)
 
-	// Derive Path: m/84'/(0'|1')/0'
+	// Derive Path: m/84'/(0'|1')/accountIdx'
 	purpose := uint32(84 + hdkeychain.HardenedKeyStart)
 	coinType := uint32(0 + hdkeychain.HardenedKeyStart)
 	if isTestnet {
 		coinType = uint32(1 + hdkeychain.HardenedKeyStart)
 	}
-	account := uint32(0 + hdkeychain.HardenedKeyStart)
+	account := uint32(accountIdx + hdkeychain.HardenedKeyStart)
 
 	m84, err := master.Derive(purpose)
 	if err != nil {
@@ -75,14 +75,14 @@ func DeriveAccountDerivation(seed []byte, isTestnet bool) (*AccountDerivation, e
 }
 
 // DeriveBIP84Address derives the Native Segwit Bitcoin Address (Bech32) at the default receiving index
-// using the derivation path: m/84'/(0'|1')/0'/0/0
-func DeriveBIP84Address(mnemonicBytes []byte, passphraseBytes []byte, isTestnet bool) (string, error) {
+// using the derivation path: m/84'/(0'|1')/accountIdx'/0/0
+func DeriveBIP84Address(mnemonicBytes []byte, passphraseBytes []byte, isTestnet bool, accountIdx uint32) (string, error) {
 	// Generate Seed (64 bytes)
 	seed := MnemonicToSeed(mnemonicBytes, passphraseBytes)
 	defer WipeBytes(seed)
 
 	// Derive account key
-	deriv, err := DeriveAccountDerivation(seed, isTestnet)
+	deriv, err := DeriveAccountDerivation(seed, isTestnet, accountIdx)
 	if err != nil {
 		return "", err
 	}

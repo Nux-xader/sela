@@ -16,7 +16,7 @@ func TestDeriveBIP84Address(t *testing.T) {
 	// Expected address from standard test vectors for path m/84'/0'/0'/0/0
 	expectedAddr := "bc1qzmtrqsfuaf6l6kkcsseumq26ukaphfj9skkug6"
 
-	addr, err := DeriveBIP84Address(mnemonic, passphrase, false)
+	addr, err := DeriveBIP84Address(mnemonic, passphrase, false, 0)
 	if err != nil {
 		t.Fatalf("Failed to derive address: %v", err)
 	}
@@ -25,7 +25,7 @@ func TestDeriveBIP84Address(t *testing.T) {
 	}
 
 	// Verify Testnet address starts with tb1q
-	addrTestnet, err := DeriveBIP84Address(mnemonic, passphrase, true)
+	addrTestnet, err := DeriveBIP84Address(mnemonic, passphrase, true, 0)
 	if err != nil {
 		t.Fatalf("Failed to derive Testnet address: %v", err)
 	}

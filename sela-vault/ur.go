@@ -55,9 +55,29 @@ func encodeBytewordsMinimal(data []byte) string {
 	return sb.String()
 }
 
-// BuildCryptoAccountUR constructs the CBOR bytes for a single BIP-84 account extended public key (m/84'/0'/0' or m/84'/1'/0'),
+// encodeCBORUint encodes an unsigned 32-bit integer according to CBOR rules.
+func encodeCBORUint(val uint32) []byte {
+	if val <= 23 {
+		return []byte{byte(val)}
+	}
+	if val <= 255 {
+		return []byte{0x18, byte(val)}
+	}
+	if val <= 65535 {
+		buf := make([]byte, 3)
+		buf[0] = 0x19
+		binary.BigEndian.PutUint16(buf[1:], uint16(val))
+		return buf
+	}
+	buf := make([]byte, 5)
+	buf[0] = 0x1a
+	binary.BigEndian.PutUint32(buf[1:], val)
+	return buf
+}
+
+// BuildCryptoAccountUR constructs the CBOR bytes for a single BIP-84 account extended public key (m/84'/0'/accountIdx' or m/84'/1'/accountIdx'),
 // including the chain code, origin path, and parent fingerprint, then encodes it as a UR.
-func BuildCryptoAccountUR(masterFP uint32, accountPubKey []byte, accountChainCode []byte, parentFPBytes []byte, isTestnet bool) string {
+func BuildCryptoAccountUR(masterFP uint32, accountPubKey []byte, accountChainCode []byte, parentFPBytes []byte, isTestnet bool, accountIdx uint32) string {
 	coinByte := byte(0x00)
 	if isTestnet {
 		coinByte = 0x01
@@ -66,20 +86,27 @@ func BuildCryptoAccountUR(masterFP uint32, accountPubKey []byte, accountChainCod
 	masterFPBytes := make([]byte, 4)
 	binary.BigEndian.PutUint32(masterFPBytes, masterFP)
 
-	// Build origin keypath CBOR (Tag 304)
+	// Build origin keypath CBOR (Tag 304) dynamically based on accountIdx
 	keypathBytes := []byte{
 		0xd9, 0x01, 0x30, // Tag 304 prefix
-		0xa3,       // Map of 3 elements
-		0x01, 0x86, // Key 1: components array (6 elements)
+		0xa3,             // Map of 3 elements
+		0x01, 0x86,       // Key 1: components array (6 elements)
 		0x18, 0x54, 0xf5, // 84' -> [84, true]
-		coinByte, 0xf5, // 0' or 1' -> [0 or 1, true]
-		0x00, 0xf5, // 0' -> [0, true]
-		0x02, 0x1a, // Key 2: source fingerprint (uint32) prefix
+		coinByte, 0xf5,   // 0' or 1' -> [0 or 1, true]
 	}
+	accountIdxBytes := encodeCBORUint(accountIdx)
+	keypathBytes = append(keypathBytes, accountIdxBytes...)
+	keypathBytes = append(keypathBytes,
+		0xf5,       // true (hardened)
+		0x02, 0x1a, // Key 2: source fingerprint (uint32) prefix
+	)
 	keypathBytes = append(keypathBytes, masterFPBytes...)
 	keypathBytes = append(keypathBytes,
 		0x03, 0x03, // Key 3: depth (3)
 	)
+
+	// Clean up transient CBOR encoding slice
+	bip.WipeBytes(accountIdxBytes)
 
 	// Build derived-key CBOR (Tag 303)
 	hdkeyBytes := []byte{

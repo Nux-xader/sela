@@ -54,13 +54,13 @@ func TestBuildCryptoAccountUR(t *testing.T) {
 	parentFPBytes := []byte{0x0d, 0x5d, 0xfb, 0xd7}
 
 	// Test Mainnet
-	urMainnet := BuildCryptoAccountUR(masterFP, pubKeyBytes, chainCode, parentFPBytes, false)
+	urMainnet := BuildCryptoAccountUR(masterFP, pubKeyBytes, chainCode, parentFPBytes, false, 0)
 	if !strings.HasPrefix(urMainnet, "UR:CRYPTO-ACCOUNT/") {
 		t.Errorf("Expected UR to start with UR:CRYPTO-ACCOUNT/, got %s", urMainnet)
 	}
 
 	// Test Testnet
-	urTestnet := BuildCryptoAccountUR(masterFP, pubKeyBytes, chainCode, parentFPBytes, true)
+	urTestnet := BuildCryptoAccountUR(masterFP, pubKeyBytes, chainCode, parentFPBytes, true, 1)
 	if !strings.HasPrefix(urTestnet, "UR:CRYPTO-ACCOUNT/") {
 		t.Errorf("Expected UR to start with UR:CRYPTO-ACCOUNT/, got %s", urTestnet)
 	}
