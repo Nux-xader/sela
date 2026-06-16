@@ -55,13 +55,26 @@ func TestBuildCryptoAccountUR(t *testing.T) {
 
 	// Test Mainnet
 	urMainnet := BuildCryptoAccountUR(masterFP, pubKeyBytes, chainCode, parentFPBytes, false)
-	if !strings.HasPrefix(urMainnet, "ur:crypto-account/") {
-		t.Errorf("Expected UR to start with ur:crypto-account/, got %s", urMainnet)
+	if !strings.HasPrefix(urMainnet, "UR:CRYPTO-ACCOUNT/") {
+		t.Errorf("Expected UR to start with UR:CRYPTO-ACCOUNT/, got %s", urMainnet)
 	}
 
 	// Test Testnet
 	urTestnet := BuildCryptoAccountUR(masterFP, pubKeyBytes, chainCode, parentFPBytes, true)
-	if !strings.HasPrefix(urTestnet, "ur:crypto-account/") {
-		t.Errorf("Expected UR to start with ur:crypto-account/, got %s", urTestnet)
+	if !strings.HasPrefix(urTestnet, "UR:CRYPTO-ACCOUNT/") {
+		t.Errorf("Expected UR to start with UR:CRYPTO-ACCOUNT/, got %s", urTestnet)
+	}
+}
+
+func TestBytewordsMinimalTable(t *testing.T) {
+	for i, word := range bytewordsMinimalTable {
+		if len(word) != 2 {
+			t.Errorf("Word at index %d has invalid length: %q", i, word)
+		}
+		for _, char := range word {
+			if char < 'A' || char > 'Z' {
+				t.Errorf("Word at index %d has non-uppercase character: %q", i, word)
+			}
+		}
 	}
 }

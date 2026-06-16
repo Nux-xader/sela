@@ -34,6 +34,8 @@ func main() {
 		err = cmdInit()
 	case "addr":
 		err = cmdAddr(isTestnet)
+	case "pair":
+		err = cmdPair(isTestnet)
 	default:
 		fmt.Printf("Unknown command: %s\n", cmdArgs[0])
 		printUsage()
@@ -53,6 +55,7 @@ func printUsage() {
 	fmt.Println("\nCommands:")
 	fmt.Println("  init       Encrypt a mnemonic into sela.vault")
 	fmt.Println("  addr       Derive the Native Segwit BIP-84 address from the vault")
+	fmt.Println("  pair       Generate a ur:crypto-account QR code for Sparrow pairing")
 }
 
 func cmdInit() error {
@@ -212,5 +215,82 @@ func cmdAddr(isTestnet bool) error {
 	if err := printQR(address); err != nil {
 		fmt.Printf("Warning: Could not generate QR Code: %v\n", err)
 	}
+	return nil
+}
+
+func cmdPair(isTestnet bool) error {
+	fmt.Println("=== SELA VAULT PAIRING ===")
+
+	// Load Vault first (Fail-fast UX)
+	vault, err := LoadVault()
+	if err != nil {
+		return fmt.Errorf("loading vault: %w", err)
+	}
+
+	fd := int(os.Stdin.Fd())
+
+	// Ask for optional BIP-39 passphrase (Hidden)
+	fmt.Print("Enter passphrase (25th word) [Hidden] [Optional]: ")
+	passphraseBytes, err := term.ReadPassword(fd)
+	if err != nil {
+		fmt.Println()
+		return fmt.Errorf("reading passphrase: %w", err)
+	}
+	defer bip.WipeBytes(passphraseBytes)
+	fmt.Println() // Newline
+
+	// Ask for vault password (Hidden)
+	fmt.Print("Enter vault password (hidden): ")
+	vaultPass, err := term.ReadPassword(fd)
+	if err != nil {
+		fmt.Println()
+		return fmt.Errorf("reading vault password: %w", err)
+	}
+	defer bip.WipeBytes(vaultPass)
+	fmt.Println() // Newline
+
+	if len(vaultPass) == 0 {
+		return errors.New("vault password cannot be empty")
+	}
+
+	// Decrypt Vault
+	fmt.Println("\nDecrypting vault...")
+
+	mnemonicBytes, err := vault.DecryptMnemonic(vaultPass)
+	if err != nil {
+		return fmt.Errorf("decrypting vault: %w", err)
+	}
+	defer bip.WipeBytes(mnemonicBytes)
+	bip.WipeBytes(vaultPass) // Wipe vault password ASAP
+
+	// Generate BIP-84 account key
+	fmt.Println("Deriving BIP-84 account public key...")
+	seed := bip.MnemonicToSeed(mnemonicBytes, passphraseBytes)
+	defer bip.WipeBytes(seed)
+	bip.WipeBytes(mnemonicBytes)   // Wipe mnemonic immediately after seed derivation
+	bip.WipeBytes(passphraseBytes) // Wipe passphrase immediately after seed derivation
+
+	deriv, err := bip.DeriveAccountDerivation(seed, isTestnet)
+	bip.WipeBytes(seed) // Wipe seed immediately after derivation
+	if err != nil {
+		return fmt.Errorf("deriving account derivation: %w", err)
+	}
+	defer deriv.AccountKey.Zero()
+
+	derivedPub, err := deriv.AccountKey.ECPubKey()
+	if err != nil {
+		return fmt.Errorf("getting public key: %w", err)
+	}
+	pubKeyBytes := derivedPub.SerializeCompressed()
+	chainCode := deriv.AccountKey.ChainCode()
+
+	// Build UR string
+	urStr := BuildCryptoAccountUR(deriv.MasterFP, pubKeyBytes, chainCode, deriv.ParentFPBytes, isTestnet)
+
+	fmt.Printf("\nGenerated ur:crypto-account URI:\n%s\n", urStr)
+	if err := printQR(urStr); err != nil {
+		fmt.Printf("Warning: Could not generate QR Code: %v\n", err)
+	}
+
 	return nil
 }
