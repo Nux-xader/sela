@@ -1,76 +1,122 @@
 package bip
 
 import (
+	"encoding/binary"
+
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
 	"github.com/btcsuite/btcd/chaincfg"
 )
 
-// DeriveBIP84Address derives the Native Segwit Bitcoin Address (Bech32) at a specific receiving index
-// using the derivation path: m/84'/0'/0'/0/index
-func DeriveBIP84Address(mnemonicBytes []byte, passphraseBytes []byte, index uint32) (string, error) {
-	// 1. Generate Seed (64 bytes)
-	seed := MnemonicToSeed(mnemonicBytes, passphraseBytes)
-	defer WipeBytes(seed)
+// AccountDerivation holds the account-level derivation details.
+type AccountDerivation struct {
+	MasterFP      uint32
+	ParentFPBytes []byte
+	AccountKey    *hdkeychain.ExtendedKey
+}
 
-	// 2. Select Network Params
-	netParams := &chaincfg.MainNetParams
+// DeriveAccountDerivation derives the BIP-84 account key m/84'/(0'|1')/0' from seed.
+// The caller is responsible for calling AccountKey.Zero() when finished.
+func DeriveAccountDerivation(seed []byte, isTestnet bool) (*AccountDerivation, error) {
+	var netParams *chaincfg.Params
+	if isTestnet {
+		netParams = &chaincfg.TestNet3Params
+	} else {
+		netParams = &chaincfg.MainNetParams
+	}
 
-	// 3. Generate Master Key (BIP-32 Root)
 	master, err := hdkeychain.NewMaster(seed, netParams)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer master.Zero()
 
-	// 4. Derive Path: m/84'/0'/0'/0/index
+	// Calculate master fingerprint (first 4 bytes of Hash160 of master public key)
+	masterPub, err := master.ECPubKey()
+	if err != nil {
+		return nil, err
+	}
+	masterFPBytes := btcutil.Hash160(masterPub.SerializeCompressed())[:4]
+	masterFP := binary.BigEndian.Uint32(masterFPBytes)
+
+	// Derive Path: m/84'/(0'|1')/0'
 	purpose := uint32(84 + hdkeychain.HardenedKeyStart)
 	coinType := uint32(0 + hdkeychain.HardenedKeyStart)
+	if isTestnet {
+		coinType = uint32(1 + hdkeychain.HardenedKeyStart)
+	}
 	account := uint32(0 + hdkeychain.HardenedKeyStart)
-	change := uint32(0)
 
-	// m/84'
 	m84, err := master.Derive(purpose)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer m84.Zero()
 
-	// m/84'/0'
 	m84Coin, err := m84.Derive(coinType)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer m84Coin.Zero()
 
-	// m/84'/0'/0'
 	m84Acc, err := m84Coin.Derive(account)
+	if err != nil {
+		return nil, err
+	}
+
+	parentFPBytes := make([]byte, 4)
+	binary.BigEndian.PutUint32(parentFPBytes, m84Acc.ParentFingerprint())
+
+	return &AccountDerivation{
+		MasterFP:      masterFP,
+		ParentFPBytes: parentFPBytes,
+		AccountKey:    m84Acc,
+	}, nil
+}
+
+// DeriveBIP84Address derives the Native Segwit Bitcoin Address (Bech32) at the default receiving index
+// using the derivation path: m/84'/(0'|1')/0'/0/0
+func DeriveBIP84Address(mnemonicBytes []byte, passphraseBytes []byte, isTestnet bool) (string, error) {
+	// Generate Seed (64 bytes)
+	seed := MnemonicToSeed(mnemonicBytes, passphraseBytes)
+	defer WipeBytes(seed)
+
+	// Derive account key
+	deriv, err := DeriveAccountDerivation(seed, isTestnet)
 	if err != nil {
 		return "", err
 	}
-	defer m84Acc.Zero()
+	defer deriv.AccountKey.Zero()
 
-	// m/84'/0'/0'/0
-	m84Change, err := m84Acc.Derive(change)
+	// Derive: accountKey/0/0
+	change := uint32(0)
+	m84Change, err := deriv.AccountKey.Derive(change)
 	if err != nil {
 		return "", err
 	}
 	defer m84Change.Zero()
 
-	// m/84'/0'/0'/0/index
+	index := uint32(0)
 	leaf, err := m84Change.Derive(index)
 	if err != nil {
 		return "", err
 	}
 	defer leaf.Zero()
 
-	// 5. Get Public Key from leaf
+	// Get Public Key from leaf
 	pubKey, err := leaf.ECPubKey()
 	if err != nil {
 		return "", err
 	}
 
-	// 6. Generate BIP-84 Address (Bech32 P2WPKH: bc1q...)
+	// Generate BIP-84 Address (Bech32 P2WPKH: bc1q... or tb1q...)
+	var netParams *chaincfg.Params
+	if isTestnet {
+		netParams = &chaincfg.TestNet3Params
+	} else {
+		netParams = &chaincfg.MainNetParams
+	}
+
 	witnessProgram := btcutil.Hash160(pubKey.SerializeCompressed())
 	witnessAddr, err := btcutil.NewAddressWitnessPubKeyHash(witnessProgram, netParams)
 	if err != nil {

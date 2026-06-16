@@ -3,6 +3,7 @@ package bip
 import (
 	"bytes"
 	"encoding/hex"
+	"strings"
 	"testing"
 )
 
@@ -12,20 +13,24 @@ func TestDeriveBIP84Address(t *testing.T) {
 	mnemonic := []byte("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art")
 	passphrase := []byte("")
 
-	// Expected addresses from standard test vectors for path m/84'/0'/0'/0/index
-	expectedAddresses := map[uint32]string{
-		0: "bc1qzmtrqsfuaf6l6kkcsseumq26ukaphfj9skkug6",
-		1: "bc1qyn0ml52dy0udru3nafudt6af7x2kv7ngysfk0k",
+	// Expected address from standard test vectors for path m/84'/0'/0'/0/0
+	expectedAddr := "bc1qzmtrqsfuaf6l6kkcsseumq26ukaphfj9skkug6"
+
+	addr, err := DeriveBIP84Address(mnemonic, passphrase, false)
+	if err != nil {
+		t.Fatalf("Failed to derive address: %v", err)
+	}
+	if addr != expectedAddr {
+		t.Errorf("Address mismatch: got %s, want %s", addr, expectedAddr)
 	}
 
-	for idx, expectedAddr := range expectedAddresses {
-		addr, err := DeriveBIP84Address(mnemonic, passphrase, idx)
-		if err != nil {
-			t.Fatalf("Failed to derive address for index %d: %v", idx, err)
-		}
-		if addr != expectedAddr {
-			t.Errorf("Address mismatch at index %d: got %s, want %s", idx, addr, expectedAddr)
-		}
+	// Verify Testnet address starts with tb1q
+	addrTestnet, err := DeriveBIP84Address(mnemonic, passphrase, true)
+	if err != nil {
+		t.Fatalf("Failed to derive Testnet address: %v", err)
+	}
+	if !strings.HasPrefix(addrTestnet, "tb1q") {
+		t.Errorf("Expected Testnet address to start with tb1q, got %s", addrTestnet)
 	}
 }
 

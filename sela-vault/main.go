@@ -6,26 +6,36 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
+	"slices"
 
 	"github.com/Nux-xader/sela/sela-vault/bip"
 	"golang.org/x/term"
 )
 
 func main() {
-	if len(os.Args) < 2 {
+	isTestnet := slices.Contains(os.Args, "--testnet") || slices.Contains(os.Args, "-testnet")
+
+	var cmdArgs []string
+	for _, arg := range os.Args[1:] {
+		if arg == "--testnet" {
+			continue
+		}
+		cmdArgs = append(cmdArgs, arg)
+	}
+
+	if len(cmdArgs) < 1 {
 		printUsage()
 		os.Exit(1)
 	}
 
 	var err error
-	switch os.Args[1] {
+	switch cmdArgs[0] {
 	case "init":
 		err = cmdInit()
 	case "address":
-		err = cmdAddress()
+		err = cmdAddress(isTestnet)
 	default:
-		fmt.Printf("Unknown command: %s\n", os.Args[1])
+		fmt.Printf("Unknown command: %s\n", cmdArgs[0])
 		printUsage()
 		os.Exit(1)
 	}
@@ -37,7 +47,9 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Println("Usage: sela-vault <command>")
+	fmt.Println("Usage: sela-vault [flags] <command>")
+	fmt.Println("\nFlags:")
+	fmt.Println("  --testnet  Use Bitcoin Testnet (derives testnet keys and addresses)")
 	fmt.Println("\nCommands:")
 	fmt.Println("  init       Encrypt a mnemonic into sela.vault")
 	fmt.Println("  address    Derive the Native Segwit BIP-84 address from the vault")
@@ -137,34 +149,18 @@ func cmdInit() error {
 	return nil
 }
 
-func cmdAddress() error {
+func cmdAddress(isTestnet bool) error {
 	fmt.Println("=== SELA VAULT ADDRESS ===")
 
-	// 1. Load Vault first (Fail-fast UX)
+	// Load Vault first (Fail-fast UX)
 	vault, err := LoadVault()
 	if err != nil {
 		return fmt.Errorf("loading vault: %w", err)
 	}
 
-	// 2. Ask for wallet index (Visible)
-	fmt.Print("Which wallet index? [Default: 0]: ")
-	reader := bufio.NewReader(os.Stdin)
-	indexStr, err := reader.ReadString('\n')
-	if err != nil {
-		return fmt.Errorf("reading wallet index: %w", err)
-	}
-	indexStr = strings.TrimSpace(indexStr)
-	var index uint32 = 0
-	if indexStr != "" {
-		_, err := fmt.Sscan(indexStr, &index)
-		if err != nil {
-			return fmt.Errorf("invalid wallet index '%s' (must be a non-negative integer)", indexStr)
-		}
-	}
-
 	fd := int(os.Stdin.Fd())
 
-	// 3. Ask for optional BIP-39 passphrase (Hidden)
+	// Ask for optional BIP-39 passphrase (Hidden)
 	fmt.Print("Enter passphrase (25th word) [Hidden] [Optional]: ")
 	passphraseBytes, err := term.ReadPassword(fd)
 	if err != nil {
@@ -174,7 +170,7 @@ func cmdAddress() error {
 	defer bip.WipeBytes(passphraseBytes)
 	fmt.Println() // Newline
 
-	// 4. Ask for vault password (Hidden)
+	// Ask for vault password (Hidden)
 	fmt.Print("Enter vault password (hidden): ")
 	vaultPass, err := term.ReadPassword(fd)
 	if err != nil {
@@ -188,7 +184,7 @@ func cmdAddress() error {
 		return errors.New("vault password cannot be empty")
 	}
 
-	// 5. Decrypt Vault
+	// Decrypt Vault
 	fmt.Println("\nDecrypting vault...")
 
 	mnemonicBytes, err := vault.DecryptMnemonic(vaultPass)
@@ -198,17 +194,21 @@ func cmdAddress() error {
 	defer bip.WipeBytes(mnemonicBytes)
 	bip.WipeBytes(vaultPass) // Wipe vault password ASAP
 
-	// 5. Generate address
+	// Generate address
 	fmt.Println("Deriving keys and generating address...")
-	address, err := bip.DeriveBIP84Address(mnemonicBytes, passphraseBytes, index)
+	address, err := bip.DeriveBIP84Address(mnemonicBytes, passphraseBytes, isTestnet)
 	bip.WipeBytes(mnemonicBytes)   // Wipe mnemonic immediately after derivation
 	bip.WipeBytes(passphraseBytes) // Wipe passphrase immediately after derivation
 	if err != nil {
 		return fmt.Errorf("deriving address: %w", err)
 	}
 
-	// 6. Print Address
-	fmt.Printf("\nDerived BIP-84 Address (Index m/84'/0'/0'/0/%d):\n%s\n", index, address)
+	// Print Address
+	pathStr := "m/84'/0'/0'/0/0"
+	if isTestnet {
+		pathStr = "m/84'/1'/0'/0/0"
+	}
+	fmt.Printf("\nDerived BIP-84 Address (Index %s):\n%s\n", pathStr, address)
 	if err := printQR(address); err != nil {
 		fmt.Printf("Warning: Could not generate QR Code: %v\n", err)
 	}
