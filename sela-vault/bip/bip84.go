@@ -3,6 +3,7 @@ package bip
 import (
 	"encoding/binary"
 
+	"github.com/Nux-xader/sela/sela-vault/util"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
 	"github.com/btcsuite/btcd/chaincfg"
@@ -79,7 +80,7 @@ func DeriveAccountDerivation(seed []byte, isTestnet bool, accountIdx uint32) (*A
 func DeriveBIP84Address(mnemonicBytes []byte, passphraseBytes []byte, isTestnet bool, accountIdx uint32) (string, error) {
 	// Generate Seed (64 bytes)
 	seed := MnemonicToSeed(mnemonicBytes, passphraseBytes)
-	defer WipeBytes(seed)
+	defer util.WipeBytes(seed)
 
 	// Derive account key
 	deriv, err := DeriveAccountDerivation(seed, isTestnet, accountIdx)

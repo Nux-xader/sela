@@ -9,7 +9,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/Nux-xader/sela/sela-vault/bip"
+	"github.com/Nux-xader/sela/sela-vault/util"
 	"golang.org/x/crypto/argon2"
 )
 
@@ -53,7 +53,7 @@ func EncryptMnemonic(mnemonic []byte, password []byte) (*Vault, error) {
 
 	// 2. Derive Key from Password
 	key := argon2.IDKey(password, salt, KDFTime, KDFMemory, KDFThreads, KeySize)
-	defer bip.WipeBytes(key)
+	defer util.WipeBytes(key)
 
 	// 3. Initialize AES-GCM
 	block, err := aes.NewCipher(key)
@@ -122,7 +122,7 @@ func LoadVault() (*Vault, error) {
 func (v *Vault) DecryptMnemonic(password []byte) ([]byte, error) {
 	// 1. Re-derive Key from Password
 	key := argon2.IDKey(password, v.KDF.Salt, v.KDF.Iterations, v.KDF.Memory, v.KDF.Parallelism, KeySize)
-	defer bip.WipeBytes(key)
+	defer util.WipeBytes(key)
 
 	// 2. Initialize AES-GCM
 	block, err := aes.NewCipher(key)

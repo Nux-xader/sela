@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"strings"
 	"testing"
+
+	"github.com/Nux-xader/sela/sela-vault/util"
 )
 
 func TestDeriveBIP84Address(t *testing.T) {
@@ -36,7 +38,7 @@ func TestDeriveBIP84Address(t *testing.T) {
 
 func TestWipeBytes(t *testing.T) {
 	b := []byte{1, 2, 3, 4, 5}
-	WipeBytes(b)
+	util.WipeBytes(b)
 	for i, val := range b {
 		if val != 0 {
 			t.Errorf("WipeBytes failed to zero index %d, got %v", i, val)
@@ -49,7 +51,7 @@ func TestMnemonicToSeed(t *testing.T) {
 	passphrase := []byte("")
 
 	seed := MnemonicToSeed(mnemonic, passphrase)
-	defer WipeBytes(seed)
+	defer util.WipeBytes(seed)
 
 	if len(seed) != 64 {
 		t.Errorf("Expected 64-byte seed, got %d bytes", len(seed))

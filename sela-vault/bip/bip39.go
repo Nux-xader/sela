@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/Nux-xader/sela/sela-vault/util"
 	"golang.org/x/crypto/pbkdf2"
 )
 
@@ -45,7 +46,7 @@ func ValidateMnemonic(mnemonicBytes []byte, wordMap map[string]int) error {
 	// 2. Convert words to bits
 	// Total bits = 24 words * 11 bits = 264 bits (33 bytes)
 	buf := make([]byte, 33)
-	defer WipeBytes(buf)
+	defer util.WipeBytes(buf)
 
 	for i, w := range words {
 		// Compiler optimizes map lookups with string(byteSlice) to not allocate memory
@@ -81,6 +82,6 @@ func ValidateMnemonic(mnemonicBytes []byte, wordMap map[string]int) error {
 // MnemonicToSeed derives the 64-byte seed from a mnemonic and passphrase utilizing PBKDF2-HMAC-SHA512 (2048 iterations)
 func MnemonicToSeed(mnemonicBytes []byte, passphraseBytes []byte) []byte {
 	salt := append([]byte("mnemonic"), passphraseBytes...)
-	defer WipeBytes(salt)
+	defer util.WipeBytes(salt)
 	return pbkdf2.Key(mnemonicBytes, salt, 2048, 64, sha512.New)
 }
