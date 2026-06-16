@@ -32,8 +32,8 @@ func main() {
 	switch cmdArgs[0] {
 	case "init":
 		err = cmdInit()
-	case "address":
-		err = cmdAddress(isTestnet)
+	case "addr":
+		err = cmdAddr(isTestnet)
 	default:
 		fmt.Printf("Unknown command: %s\n", cmdArgs[0])
 		printUsage()
@@ -52,7 +52,7 @@ func printUsage() {
 	fmt.Println("  --testnet  Use Bitcoin Testnet (derives testnet keys and addresses)")
 	fmt.Println("\nCommands:")
 	fmt.Println("  init       Encrypt a mnemonic into sela.vault")
-	fmt.Println("  address    Derive the Native Segwit BIP-84 address from the vault")
+	fmt.Println("  addr       Derive the Native Segwit BIP-84 address from the vault")
 }
 
 func cmdInit() error {
@@ -149,7 +149,7 @@ func cmdInit() error {
 	return nil
 }
 
-func cmdAddress(isTestnet bool) error {
+func cmdAddr(isTestnet bool) error {
 	fmt.Println("=== SELA VAULT ADDRESS ===")
 
 	// Load Vault first (Fail-fast UX)
