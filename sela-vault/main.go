@@ -3,12 +3,16 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
 
 	"github.com/Nux-xader/sela/sela-vault/bip"
+	"github.com/Nux-xader/sela/sela-vault/util"
+	"github.com/btcsuite/btcd/btcutil/hdkeychain"
+	"github.com/btcsuite/btcd/chaincfg"
 	"golang.org/x/term"
 )
 
@@ -35,6 +39,8 @@ func main() {
 		err = cmdAddr(isTestnet, accountIdx)
 	case "pair":
 		err = cmdPair(isTestnet, accountIdx)
+	case "sign":
+		err = cmdSign(isTestnet, accountIdx)
 	default:
 		fmt.Printf("Unknown command: %s\n", cmdArgs[0])
 		printUsage()
@@ -56,6 +62,7 @@ func printUsage() {
 	fmt.Println("  init               Encrypt a mnemonic into sela.vault")
 	fmt.Println("  addr               Derive the Native Segwit BIP-84 address from the vault")
 	fmt.Println("  pair               Generate a ur:crypto-account QR code for Sparrow pairing")
+	fmt.Println("  sign               Verify and sign a PSBT transaction")
 }
 
 func cmdInit() error {
@@ -89,7 +96,7 @@ func cmdInit() error {
 		fmt.Println()
 		return fmt.Errorf("reading password: %w", err)
 	}
-	defer bip.WipeBytes(passBytes)
+	defer util.WipeBytes(passBytes)
 	fmt.Println()
 
 	if len(passBytes) == 0 {
@@ -102,7 +109,7 @@ func cmdInit() error {
 		fmt.Println()
 		return fmt.Errorf("reading password confirmation: %w", err)
 	}
-	defer bip.WipeBytes(confirmBytes)
+	defer util.WipeBytes(confirmBytes)
 	fmt.Println()
 
 	if !bytes.Equal(passBytes, confirmBytes) {
@@ -118,7 +125,7 @@ func cmdInit() error {
 	if err != nil {
 		return fmt.Errorf("reading input: %w", err)
 	}
-	defer bip.WipeBytes(inputBytes)
+	defer util.WipeBytes(inputBytes)
 
 	// Instantly clear the screen and scrollback buffer to hide cleartext mnemonic
 	fmt.Print("\033[H\033[2J\033[3J")
@@ -170,7 +177,7 @@ func cmdAddr(isTestnet bool, accountIdx uint32) error {
 		fmt.Println()
 		return fmt.Errorf("reading passphrase: %w", err)
 	}
-	defer bip.WipeBytes(passphraseBytes)
+	defer util.WipeBytes(passphraseBytes)
 	fmt.Println() // Newline
 
 	// Ask for vault password (Hidden)
@@ -180,7 +187,7 @@ func cmdAddr(isTestnet bool, accountIdx uint32) error {
 		fmt.Println()
 		return fmt.Errorf("reading vault password: %w", err)
 	}
-	defer bip.WipeBytes(vaultPass)
+	defer util.WipeBytes(vaultPass)
 	fmt.Println() // Newline
 
 	if len(vaultPass) == 0 {
@@ -194,14 +201,14 @@ func cmdAddr(isTestnet bool, accountIdx uint32) error {
 	if err != nil {
 		return fmt.Errorf("decrypting vault: %w", err)
 	}
-	defer bip.WipeBytes(mnemonicBytes)
-	bip.WipeBytes(vaultPass) // Wipe vault password ASAP
+	defer util.WipeBytes(mnemonicBytes)
+	util.WipeBytes(vaultPass) // Wipe vault password ASAP
 
 	// Generate address
 	fmt.Println("Deriving keys and generating address...")
 	address, err := bip.DeriveBIP84Address(mnemonicBytes, passphraseBytes, isTestnet, accountIdx)
-	bip.WipeBytes(mnemonicBytes)   // Wipe mnemonic immediately after derivation
-	bip.WipeBytes(passphraseBytes) // Wipe passphrase immediately after derivation
+	util.WipeBytes(mnemonicBytes)   // Wipe mnemonic immediately after derivation
+	util.WipeBytes(passphraseBytes) // Wipe passphrase immediately after derivation
 	if err != nil {
 		return fmt.Errorf("deriving address: %w", err)
 	}
@@ -236,7 +243,7 @@ func cmdPair(isTestnet bool, accountIdx uint32) error {
 		fmt.Println()
 		return fmt.Errorf("reading passphrase: %w", err)
 	}
-	defer bip.WipeBytes(passphraseBytes)
+	defer util.WipeBytes(passphraseBytes)
 	fmt.Println() // Newline
 
 	// Ask for vault password (Hidden)
@@ -246,7 +253,7 @@ func cmdPair(isTestnet bool, accountIdx uint32) error {
 		fmt.Println()
 		return fmt.Errorf("reading vault password: %w", err)
 	}
-	defer bip.WipeBytes(vaultPass)
+	defer util.WipeBytes(vaultPass)
 	fmt.Println() // Newline
 
 	if len(vaultPass) == 0 {
@@ -260,18 +267,18 @@ func cmdPair(isTestnet bool, accountIdx uint32) error {
 	if err != nil {
 		return fmt.Errorf("decrypting vault: %w", err)
 	}
-	defer bip.WipeBytes(mnemonicBytes)
-	bip.WipeBytes(vaultPass) // Wipe vault password ASAP
+	defer util.WipeBytes(mnemonicBytes)
+	util.WipeBytes(vaultPass) // Wipe vault password ASAP
 
 	// Generate BIP-84 account key
 	fmt.Println("Deriving BIP-84 account public key...")
 	seed := bip.MnemonicToSeed(mnemonicBytes, passphraseBytes)
-	defer bip.WipeBytes(seed)
-	bip.WipeBytes(mnemonicBytes)   // Wipe mnemonic immediately after seed derivation
-	bip.WipeBytes(passphraseBytes) // Wipe passphrase immediately after seed derivation
+	defer util.WipeBytes(seed)
+	util.WipeBytes(mnemonicBytes)   // Wipe mnemonic immediately after seed derivation
+	util.WipeBytes(passphraseBytes) // Wipe passphrase immediately after seed derivation
 
 	deriv, err := bip.DeriveAccountDerivation(seed, isTestnet, accountIdx)
-	bip.WipeBytes(seed) // Wipe seed immediately after derivation
+	util.WipeBytes(seed) // Wipe seed immediately after derivation
 	if err != nil {
 		return fmt.Errorf("deriving account derivation: %w", err)
 	}
@@ -286,8 +293,149 @@ func cmdPair(isTestnet bool, accountIdx uint32) error {
 
 	// Build UR string
 	urStr := BuildCryptoAccountUR(deriv.MasterFP, pubKeyBytes, chainCode, deriv.ParentFPBytes, isTestnet, accountIdx)
+	util.WipeBytes(pubKeyBytes)
+	util.WipeBytes(chainCode)
+	util.WipeBytes(deriv.ParentFPBytes)
 
 	fmt.Printf("\nGenerated ur:crypto-account URI:\n%s\n", urStr)
+	if err := printQR(urStr); err != nil {
+		fmt.Printf("Warning: Could not generate QR Code: %v\n", err)
+	}
+
+	return nil
+}
+
+// cmdSign parses, verifies, and signs a PSBT transaction.
+// It prioritizes security by deferring decryption until the user authorizes the transaction.
+func cmdSign(isTestnet bool, accountIdx uint32) error {
+	fmt.Println("=== SELA VAULT TRANSACTION SIGNING ===")
+
+	// Load Vault first (Fail-fast UX)
+	vault, err := LoadVault()
+	if err != nil {
+		return fmt.Errorf("loading vault: %w", err)
+	}
+
+	// Read PSBT input
+	fmt.Println("Please paste your Base64 or UR:CRYPTO-PSBT transaction payload:")
+	reader := bufio.NewReader(os.Stdin)
+	inputBytes, err := reader.ReadBytes('\n')
+	if err != nil {
+		return fmt.Errorf("reading input: %w", err)
+	}
+
+	// Parse PSBT (Uses only public data, no keys decrypted yet)
+	fmt.Println("\nParsing transaction...")
+	p, err := parsePSBTInput(inputBytes)
+	if err != nil {
+		return err
+	}
+
+	// Extract transaction details for verification
+	details, err := extractTxDetails(p, isTestnet, accountIdx)
+	if err != nil {
+		return err
+	}
+
+	// Print Verification Screen
+	fmt.Println("\n=== TRANSACTION VERIFICATION ===")
+	fmt.Printf("Total Input:  %.8f BTC\n", float64(details.TotalInput)/1e8)
+	fmt.Println("\nOutputs:")
+	for _, rec := range details.RecipientOuts {
+		fmt.Println(rec)
+	}
+	for _, chg := range details.ChangeOuts {
+		fmt.Println(chg)
+	}
+	fmt.Printf("\nMiner Fee:    %.8f BTC (%.1f sat/B)\n", float64(details.MinerFee)/1e8, details.FeeRate)
+
+	// Authorize with Random 5-character code
+	confirmCode := util.GenerateConfirmCode()
+	fmt.Printf("\nType the random code '%s' to authorize signing: ", confirmCode)
+	var userInput string
+	_, _ = fmt.Scanln(&userInput)
+	if userInput != confirmCode {
+		return errors.New("incorrect confirmation code: transaction signing aborted")
+	}
+
+	// Decrypt Vault (Prompted at the very end to minimize RAM lifetime of keys)
+	fd := int(os.Stdin.Fd())
+	fmt.Print("Enter passphrase (25th word) [Hidden] [Optional]: ")
+	passphraseBytes, err := term.ReadPassword(fd)
+	if err != nil {
+		fmt.Println()
+		return fmt.Errorf("reading passphrase: %w", err)
+	}
+	defer util.WipeBytes(passphraseBytes)
+	fmt.Println()
+
+	fmt.Print("Enter vault password (hidden): ")
+	vaultPass, err := term.ReadPassword(fd)
+	if err != nil {
+		fmt.Println()
+		return fmt.Errorf("reading vault password: %w", err)
+	}
+	defer util.WipeBytes(vaultPass)
+	fmt.Println()
+
+	if len(vaultPass) == 0 {
+		return errors.New("vault password cannot be empty")
+	}
+
+	fmt.Println("\nDecrypting keys and signing inputs...")
+	mnemonicBytes, err := vault.DecryptMnemonic(vaultPass)
+	if err != nil {
+		return fmt.Errorf("decrypting vault: %w", err)
+	}
+	defer util.WipeBytes(mnemonicBytes)
+	util.WipeBytes(vaultPass) // Wipe vault password immediately
+
+	var netParams *chaincfg.Params
+	if isTestnet {
+		netParams = &chaincfg.TestNet3Params
+	} else {
+		netParams = &chaincfg.MainNetParams
+	}
+
+	seed := bip.MnemonicToSeed(mnemonicBytes, passphraseBytes)
+	defer util.WipeBytes(seed)
+	util.WipeBytes(mnemonicBytes)   // Wipe mnemonic immediately after seed derivation
+	util.WipeBytes(passphraseBytes) // Wipe passphrase immediately after seed derivation
+
+	masterKey, err := hdkeychain.NewMaster(seed, netParams)
+	util.WipeBytes(seed) // Wipe seed immediately after master derivation
+	if err != nil {
+		return fmt.Errorf("generating master key: %w", err)
+	}
+	defer masterKey.Zero()
+
+	// Sign Inputs
+	signedCount, err := signTransactionInputs(p, masterKey, netParams, isTestnet, accountIdx)
+	masterKey.Zero() // Zero master key immediately after signing is completed to minimize RAM lifetime
+	if err != nil {
+		return err
+	}
+
+	if signedCount == 0 {
+		return errors.New("no inputs matched your vault's key: zero signatures created")
+	}
+
+	// Output Signed PSBT
+	var signedBuf bytes.Buffer
+	err = p.Serialize(&signedBuf)
+	if err != nil {
+		return fmt.Errorf("serializing signed PSBT: %w", err)
+	}
+	signedBytes := signedBuf.Bytes()
+	defer util.WipeBytes(signedBytes)
+
+	signedBase64 := base64.StdEncoding.EncodeToString(signedBytes)
+	urStr := BuildCryptoPSBTUR(signedBytes)
+
+	fmt.Printf("\nSuccessfully signed %d inputs!\n", signedCount)
+	fmt.Printf("\nSigned PSBT (Base64):\n%s\n", signedBase64)
+	fmt.Printf("\nSigned PSBT UR URI:\n%s\n", urStr)
+
 	if err := printQR(urStr); err != nil {
 		fmt.Printf("Warning: Could not generate QR Code: %v\n", err)
 	}
