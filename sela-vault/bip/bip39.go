@@ -70,6 +70,7 @@ func ValidateMnemonic(mnemonicBytes []byte, wordMap map[string]int) error {
 
 	// 3. Calculate Expected Checksum (SHA256 of first 32 bytes / 256 bits of entropy)
 	hash := sha256.Sum256(buf[:32])
+	defer util.WipeBytes(hash[:])
 
 	// 4. Verify Checksum (first 8 bits / 1 byte of SHA256 matches the 33rd byte)
 	if hash[0] != buf[32] {
