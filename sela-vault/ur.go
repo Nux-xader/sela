@@ -182,3 +182,37 @@ func decodeBytewordsMinimal(s string) ([]byte, error) {
 	}
 	return data, nil
 }
+
+// encodeCBORByteString encodes raw bytes into a CBOR byte string format.
+func encodeCBORByteString(data []byte) []byte {
+	L := uint32(len(data))
+	var prefix []byte
+	if L <= 23 {
+		prefix = []byte{0x40 + byte(L)}
+	} else if L <= 255 {
+		prefix = []byte{0x58, byte(L)}
+	} else if L <= 65535 {
+		prefix = []byte{0x59, 0, 0}
+		binary.BigEndian.PutUint16(prefix[1:], uint16(L))
+	} else {
+		prefix = []byte{0x5a, 0, 0, 0, 0}
+		binary.BigEndian.PutUint32(prefix[1:], L)
+	}
+	return append(prefix, data...)
+}
+
+// BuildCryptoPSBTUR packages signed PSBT bytes into a UR:CRYPTO-PSBT string.
+func BuildCryptoPSBTUR(psbtBytes []byte) string {
+	cborBytes := []byte{0xd9, 0x01, 0x36} // Tag 310 prefix
+	cborBytes = append(cborBytes, encodeCBORByteString(psbtBytes)...)
+
+	checksum := crc32.ChecksumIEEE(cborBytes)
+	payload := make([]byte, len(cborBytes)+4)
+	copy(payload, cborBytes)
+	binary.BigEndian.PutUint32(payload[len(cborBytes):], checksum)
+
+	encoded := encodeBytewordsMinimal(payload)
+	util.WipeBytes(cborBytes)
+	util.WipeBytes(payload)
+	return "UR:CRYPTO-PSBT/" + encoded
+}
