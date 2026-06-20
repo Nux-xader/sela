@@ -14,10 +14,11 @@ SELA is not a monolithic application. It is a suite of two strictly isolated too
 *   **Philosophy**: **Zero External Dependencies**.
 *   **Why**: The birth of your key is the most critical moment. We believe you should be able to audit 100% of the code that generates it. `sela-gen` uses **only** the Go Standard Library. No third-party code. No supply chain risks.
 
-### 2. [sela-vault](./sela-vault) (The Guardian)
-*   **Purpose**: Encrypting your mnemonic and deriving keys/addresses.
-*   **Philosophy**: **Trusted Dependencies** (`btcsuite`).
-*   **Why**: Key derivation (BIP-32) and elliptic curve operations (secp256k1) are mathematically complex and prone to implementation bugs. To prevent loss of funds, `sela-vault` uses the industry-standard, battle-tested `btcsuite` packages for cryptographic operations, while keeping a minimal, auditable wrapper for storage and CLI.
+### 2. [sela-vault](./sela-vault) (The Guardian & Signer)
+*   **Purpose**: Encrypting your mnemonic, deriving keys, and securely signing Bitcoin Transactions (PSBT).
+*   **Philosophy**: **Trusted Dependencies** (`btcsuite`), **Stateless Execution**, & **Paranoid Testing**.
+*   **Why**: Key derivation (BIP-32), elliptic curve operations (secp256k1), and transaction parsing (PSBT/BIP-174) are mathematically complex and prone to implementation bugs. To prevent loss of funds, `sela-vault` uses the industry-standard, battle-tested `btcsuite` packages for cryptographic operations. It acts as a 100% stateless signer—deriving keys on the fly, signing the transaction, and aggressively wiping memory immediately after.
+*   **Security Assurance**: `sela-vault` enforces a rigorous **3-Layer Security Testing Pyramid** (Standard Unit, Fuzzing, and live Regtest Battle Testing with thousands of attack vectors) to ensure zero data-dependent panics and perfect attack mitigation.
 
 ---
 
@@ -47,19 +48,31 @@ sela/
 
 ## Getting Started
 
-1. To generate a new master key (Phase 1):
+1. To generate a new master key:
    ```bash
    cd sela-gen
    go run main.go
    ```
 
-2. To encrypt and store your mnemonic and derive addresses (Phase 2):
+2. To initialize your vault by encrypting and storing your mnemonic:
    ```bash
    cd sela-vault
    go run . init
+   ```
+
+3. To derive your address or generate a pairing QR code for Sparrow Wallet:
+   ```bash
+   cd sela-vault
    go run . addr
    go run . pair
    ```
+
+4. To sign a transaction (PSBT) sent from Sparrow Wallet:
+   ```bash
+   cd sela-vault
+   go run . sign
+   ```
+   *(Note: You can append the `--testnet` flag to any `sela-vault` command to operate on the Bitcoin Testnet).*
 
 ---
 
