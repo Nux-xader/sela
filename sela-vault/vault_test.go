@@ -225,7 +225,7 @@ func TestPSBTSecureSigning(t *testing.T) {
 		Value:    150000,
 		PkScript: inputPkScript,
 	}
-	
+
 	// Create a dummy NonWitnessUtxo to pass the security check
 	dummyTx := wire.NewMsgTx(2)
 	dummyTx.AddTxOut(&wire.TxOut{
@@ -281,4 +281,3 @@ func TestPSBTSecureSigning(t *testing.T) {
 		t.Errorf("Expected Sighash security warning error, got: %v", err)
 	}
 }
-

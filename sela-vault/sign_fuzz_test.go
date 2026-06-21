@@ -1,9 +1,9 @@
 package main
 
 import (
-	"testing"
-	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
+	"github.com/btcsuite/btcd/chaincfg"
+	"testing"
 )
 
 // FuzzParsePSBTInput bombards the PSBT parser with random garbage to ensure it NEVER panics.

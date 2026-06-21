@@ -24,7 +24,7 @@ func printQR(text string) error {
 			// Check if pixel is inside boundaries and is black
 			isBlack := x >= 0 && x < code.Size && y >= 0 && y < code.Size && code.Black(x, y)
 			if isBlack {
-				fmt.Print("  ")         // Black module (empty space)
+				fmt.Print("  ") // Black module (empty space)
 				continue
 			}
 			fmt.Print("\u2588\u2588") // White module (solid block)

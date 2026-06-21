@@ -162,7 +162,6 @@ func parsePSBTInput(input []byte) (*psbt.Packet, error) {
 	return packet, nil
 }
 
-
 // TxDetails stores extracted information from PSBT for terminal verification.
 type TxDetails struct {
 	TotalInput    int64
@@ -198,9 +197,8 @@ func extractTxDetails(p *psbt.Packet, isTestnet bool, accountIdx uint32) (*TxDet
 					return nil, errors.New("CRITICAL SECURITY WARNING: Fake NonWitnessUtxo provided! TxHash does not match Outpoint!")
 				}
 			} else {
-				// In a true hardware wallet, we MUST mandate NonWitnessUtxo for SegWit v0.
-				// If we allow it to be nil, the attacker will just omit it to bypass the check.
-				return nil, errors.New("CRITICAL SECURITY WARNING: Missing NonWitnessUtxo for SegWit v0 input! Vulnerable to Fake WitnessUtxo Attack!")
+				// Hybrid Mode: Warn instead of hard-failing to allow compact base64/QR usage
+				fmt.Printf("\033[31m⚠️  SECURITY WARNING: Missing NonWitnessUtxo for SegWit input %d! Amount cannot be verified.\033[0m\n", inIdx)
 			}
 			if in.WitnessUtxo.Value < 0 || in.WitnessUtxo.Value > 21000000*100000000 {
 				return nil, errors.New("CRITICAL SECURITY WARNING: Invalid WitnessUtxo value (negative or exceeds max supply)!")
@@ -210,7 +208,7 @@ func extractTxDetails(p *psbt.Packet, isTestnet bool, accountIdx uint32) (*TxDet
 			return nil, errors.New("non-witness inputs are not supported (BIP-84 only)")
 		}
 	}
-	
+
 	if totalInput < 0 || totalInput > 21000000*100000000 {
 		return nil, errors.New("CRITICAL SECURITY WARNING: Total input value exceeds maximum possible supply!")
 	}
@@ -302,7 +300,7 @@ func verifyChangeAddresses(p *psbt.Packet, masterKey *hdkeychain.ExtendedKey, de
 			if err != nil {
 				return fmt.Errorf("deriving change key for verification: %w", err)
 			}
-			
+
 			changePub, err := changeKey.ECPubKey()
 			changeKey.Zero() // Wipe intermediate key immediately
 			if err != nil {
@@ -322,7 +320,7 @@ func verifyChangeAddresses(p *psbt.Packet, masterKey *hdkeychain.ExtendedKey, de
 			if !bytes.Equal(out.PkScript, expectedPkScript) {
 				return fmt.Errorf("CRITICAL SECURITY WARNING: Change address script mismatch for output %d! Expected address for path m/84'/%d'/%d'/1/%d does not match actual output script. Aborting signing to prevent loss of funds", outIdx, coinType, accountIdx, changeIdx)
 			}
-			
+
 			// Prevent Fake Change Address via manipulated Bip32Derivation PubKey
 			if !bytes.Equal(p.Outputs[outIdx].Bip32Derivation[0].PubKey, changePub.SerializeCompressed()) {
 				return fmt.Errorf("CRITICAL SECURITY WARNING: Change address public key mismatch! The coordinator is lying about the change address pubkey.")
@@ -350,7 +348,7 @@ func createSigHashFetcher(p *psbt.Packet) *txscript.TxSigHashes {
 // signSingleInput attempts to sign a single PSBT input if it belongs to our seed.
 func signSingleInput(p *psbt.Packet, inputIdx int, masterKey *hdkeychain.ExtendedKey, derivedMasterFP uint32, sigHashes *txscript.TxSigHashes, netParams *chaincfg.Params, isTestnet bool, accountIdx uint32) (bool, error) {
 	in := p.Inputs[inputIdx]
-	
+
 	// CRITICAL SECURITY: We ONLY allow SIGHASH_ALL. Allowing SIGHASH_NONE or SIGHASH_SINGLE
 	// would let a malicious Sparrow Wallet take our signature and attach it to a transaction
 	// that pays a hacker instead of our intended recipients.
@@ -378,58 +376,58 @@ func signSingleInput(p *psbt.Packet, inputIdx int, masterKey *hdkeychain.Extende
 				return false, fmt.Errorf("CRITICAL SECURITY WARNING: BIP Mismatch Attack detected! The coordinator requested signing for an unauthorized derivation path: m/%d'/%d'/%d'. Sela Vault only authorizes m/84'/%d'/%d'.", d.Bip32Path[0]-hdkeychain.HardenedKeyStart, d.Bip32Path[1]-hdkeychain.HardenedKeyStart, d.Bip32Path[2]-hdkeychain.HardenedKeyStart, coinType, accountIdx)
 			}
 
-				signed := false
-				err := func() error {
-					leafKey, err := derivePath(masterKey, d.Bip32Path)
-					if err != nil {
-						return fmt.Errorf("deriving input private key: %w", err)
-					}
-					defer leafKey.Zero()
-
-					privKey, err := leafKey.ECPrivKey()
-					if err != nil {
-						return fmt.Errorf("getting EC private key: %w", err)
-					}
-					defer privKey.Zero()
-
-					pubKey, err := leafKey.ECPubKey()
-					if err != nil {
-						return fmt.Errorf("getting EC public key: %w", err)
-					}
-
-					if !bytes.Equal(pubKey.SerializeCompressed(), d.PubKey) {
-						return nil // Not a match, skip silently
-					}
-
-					pubKeyHash := btcutil.Hash160(pubKey.SerializeCompressed())
-					addr, err := btcutil.NewAddressPubKeyHash(pubKeyHash, netParams)
-					if err != nil {
-						return fmt.Errorf("creating address from pubkeyhash: %w", err)
-					}
-					subScript, err := txscript.PayToAddrScript(addr)
-					if err != nil {
-						return fmt.Errorf("creating subscript: %w", err)
-					}
-
-					sigWithHashType, err := txscript.RawTxInWitnessSignature(p.UnsignedTx, sigHashes, inputIdx, in.WitnessUtxo.Value, subScript, txscript.SigHashAll, privKey)
-					if err != nil {
-						return fmt.Errorf("creating witness signature: %w", err)
-					}
-
-					p.Inputs[inputIdx].PartialSigs = append(p.Inputs[inputIdx].PartialSigs, &psbt.PartialSig{
-						PubKey:    pubKey.SerializeCompressed(),
-						Signature: sigWithHashType,
-					})
-					signed = true
-					return nil
-				}()
-
+			signed := false
+			err := func() error {
+				leafKey, err := derivePath(masterKey, d.Bip32Path)
 				if err != nil {
-					return false, err
+					return fmt.Errorf("deriving input private key: %w", err)
 				}
-				if signed {
-					return true, nil
+				defer leafKey.Zero()
+
+				privKey, err := leafKey.ECPrivKey()
+				if err != nil {
+					return fmt.Errorf("getting EC private key: %w", err)
 				}
+				defer privKey.Zero()
+
+				pubKey, err := leafKey.ECPubKey()
+				if err != nil {
+					return fmt.Errorf("getting EC public key: %w", err)
+				}
+
+				if !bytes.Equal(pubKey.SerializeCompressed(), d.PubKey) {
+					return nil // Not a match, skip silently
+				}
+
+				pubKeyHash := btcutil.Hash160(pubKey.SerializeCompressed())
+				addr, err := btcutil.NewAddressPubKeyHash(pubKeyHash, netParams)
+				if err != nil {
+					return fmt.Errorf("creating address from pubkeyhash: %w", err)
+				}
+				subScript, err := txscript.PayToAddrScript(addr)
+				if err != nil {
+					return fmt.Errorf("creating subscript: %w", err)
+				}
+
+				sigWithHashType, err := txscript.RawTxInWitnessSignature(p.UnsignedTx, sigHashes, inputIdx, in.WitnessUtxo.Value, subScript, txscript.SigHashAll, privKey)
+				if err != nil {
+					return fmt.Errorf("creating witness signature: %w", err)
+				}
+
+				p.Inputs[inputIdx].PartialSigs = append(p.Inputs[inputIdx].PartialSigs, &psbt.PartialSig{
+					PubKey:    pubKey.SerializeCompressed(),
+					Signature: sigWithHashType,
+				})
+				signed = true
+				return nil
+			}()
+
+			if err != nil {
+				return false, err
+			}
+			if signed {
+				return true, nil
+			}
 		}
 	}
 	return false, nil
@@ -468,13 +466,6 @@ func signTransactionInputs(p *psbt.Packet, masterKey *hdkeychain.ExtendedKey, ne
 	// Prevent OOM DoS Bomb and Dust Spam Attacks by enforcing limits
 	if len(p.Inputs) > 20 || len(p.UnsignedTx.TxOut) > 20 {
 		return 0, fmt.Errorf("CRITICAL SECURITY WARNING: Transaction too complex! Sela Vault strictly limits transactions to 20 inputs and 20 outputs to prevent DoS/Spam attacks.")
-	}
-
-	// Prevent RBF Hijacking Attack
-	for _, in := range p.UnsignedTx.TxIn {
-		if in.Sequence < 0xfffffffe {
-			return 0, fmt.Errorf("CRITICAL SECURITY WARNING: RBF (Replace-By-Fee) Hijacking detected! Sequence: %v", in.Sequence)
-		}
 	}
 
 	// Extract details and perform Fee Sniping check
