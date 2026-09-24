@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"runtime"
 	"strings"
 )
@@ -40,21 +41,53 @@ func wipeBytes(b []byte) {
 
 // readSecretLine reads a line from stdin byte-by-byte without internal buffering.
 // It returns a slice pointing to a pre-allocated buffer that can be securely wiped.
+// It uses stty to disable echo and canonical mode (Zero External Dependencies).
 func readSecretLine() ([]byte, error) {
+	// Disable echo and canonical mode
+	cmd := exec.Command("stty", "-echo", "-icanon")
+	cmd.Stdin = os.Stdin
+	_ = cmd.Run()
+	
+	// Ensure terminal is restored
+	defer func() {
+		restoreCmd := exec.Command("stty", "echo", "icanon")
+		restoreCmd.Stdin = os.Stdin
+		_ = restoreCmd.Run()
+	}()
+
 	buf := make([]byte, 1024)
 	var idx int
 	var b [1]byte
 	for {
 		n, err := os.Stdin.Read(b[:])
 		if n > 0 {
-			if b[0] == '\n' {
+			char := b[0]
+			if char == '\n' || char == '\r' {
 				break
 			}
-			if b[0] == '\r' {
+			
+			// Handle Backspace (127) or Ctrl+H (8)
+			if char == 127 || char == 8 {
+				if idx > 0 {
+					idx--
+					buf[idx] = 0 // Wipe the actual character
+				}
 				continue
 			}
+			
+			// Ctrl+C (3)
+			if char == 3 {
+				wipeBytes(buf)
+				return nil, fmt.Errorf("interrupted")
+			}
+			
+			// Ctrl+D (4)
+			if char == 4 && idx == 0 {
+				break
+			}
+
 			if idx < len(buf) {
-				buf[idx] = b[0]
+				buf[idx] = char
 				idx++
 			} else {
 				wipeBytes(buf)
