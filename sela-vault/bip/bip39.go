@@ -11,6 +11,7 @@ import (
 
 	"github.com/Nux-xader/sela/sela-vault/util"
 	"golang.org/x/crypto/pbkdf2"
+	"golang.org/x/text/unicode/norm"
 )
 
 // LoadWordlist reads the BIP-39 wordlist and returns a list of words.
@@ -82,7 +83,20 @@ func ValidateMnemonic(mnemonicBytes []byte, wordMap map[string]int) error {
 
 // MnemonicToSeed derives the 64-byte seed from a mnemonic and passphrase utilizing PBKDF2-HMAC-SHA512 (2048 iterations)
 func MnemonicToSeed(mnemonicBytes []byte, passphraseBytes []byte) []byte {
-	salt := append([]byte("mnemonic"), passphraseBytes...)
+	// 1. NFKD Normalization (BIP-39 Standard Requirement)
+	// This ensures that special characters (e.g. accented letters like 'é') are mathematically identical
+	// regardless of whether they were typed as a single character (NFC) or two characters (NFD),
+	// guaranteeing that the derived seed perfectly matches other standard wallets (Trezor/Sparrow).
+	normMnemonic := norm.NFKD.Bytes(mnemonicBytes)
+	defer util.WipeBytes(normMnemonic)
+
+	normPassphrase := norm.NFKD.Bytes(passphraseBytes)
+	defer util.WipeBytes(normPassphrase)
+
+	// 2. Build Salt ("mnemonic" + normalized passphrase)
+	salt := append([]byte("mnemonic"), normPassphrase...)
 	defer util.WipeBytes(salt)
-	return pbkdf2.Key(mnemonicBytes, salt, 2048, 64, sha512.New)
+	
+	// 3. PBKDF2 Derivation
+	return pbkdf2.Key(normMnemonic, salt, 2048, 64, sha512.New)
 }

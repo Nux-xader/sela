@@ -1,6 +1,6 @@
 module github.com/Nux-xader/sela/sela-vault
 
-go 1.25
+go 1.26.0
 
 require (
 	github.com/btcsuite/btcd v0.24.2
@@ -10,6 +10,7 @@ require (
 	github.com/btcsuite/btcd/chaincfg/chainhash v1.1.0
 	golang.org/x/crypto v0.48.0
 	golang.org/x/term v0.40.0
+	golang.org/x/text v0.42.0
 	rsc.io/qr v0.2.0
 )
 
