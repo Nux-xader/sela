@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/base64"
 	"errors"
@@ -13,17 +12,18 @@ import (
 	"github.com/Nux-xader/sela/sela-vault/util"
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
 	"github.com/btcsuite/btcd/chaincfg"
-	"golang.org/x/term"
 )
 
 func main() {
 	flag.Usage = printUsage
 	testnetPtr := flag.Bool("testnet", false, "Use Bitcoin Testnet")
 	accountPtr := flag.Uint("account", 0, "Specify BIP-44/84 account index")
+	allowMissingUtxoPtr := flag.Bool("allow-missing-utxo", false, "Allow signing without NonWitnessUtxo (less secure, compact QR)")
 	flag.Parse()
 
 	isTestnet := *testnetPtr
 	accountIdx := uint32(*accountPtr)
+	allowMissingUtxo := *allowMissingUtxoPtr
 	cmdArgs := flag.Args()
 
 	if len(cmdArgs) < 1 {
@@ -40,7 +40,7 @@ func main() {
 	case "pair":
 		err = cmdPair(isTestnet, accountIdx)
 	case "sign":
-		err = cmdSign(isTestnet, accountIdx)
+		err = cmdSign(isTestnet, accountIdx, allowMissingUtxo)
 	default:
 		fmt.Printf("Unknown command: %s\n", cmdArgs[0])
 		printUsage()
@@ -56,8 +56,9 @@ func main() {
 func printUsage() {
 	fmt.Println("Usage: sela-vault [flags] <command>")
 	fmt.Println("\nFlags:")
-	fmt.Println("  --testnet          Use Bitcoin Testnet (derives testnet keys and addresses)")
-	fmt.Println("  --account <index>  Specify BIP-44/84 account index (default: 0)")
+	fmt.Println("  --testnet              Use Bitcoin Testnet (derives testnet keys and addresses)")
+	fmt.Println("  --account <index>      Specify BIP-44/84 account index (default: 0)")
+	fmt.Println("  --allow-missing-utxo   Allow signing without NonWitnessUtxo (less secure, compact QR)")
 	fmt.Println("\nCommands:")
 	fmt.Println("  init               Encrypt a mnemonic into sela.vault")
 	fmt.Println("  addr               Derive the Native Segwit BIP-84 address from the vault")
@@ -91,7 +92,7 @@ func cmdInit() error {
 
 	// 1. Read Password (FIRST - To minimize Time-in-Memory for Mnemonic)
 	fmt.Print("Enter encryption password (hidden): ")
-	passBytes, err := term.ReadPassword(fd)
+	passBytes, err := util.ReadSecretPassword(fd)
 	if err != nil {
 		fmt.Println()
 		return fmt.Errorf("reading password: %w", err)
@@ -104,7 +105,7 @@ func cmdInit() error {
 	}
 
 	fmt.Print("Confirm password (hidden): ")
-	confirmBytes, err := term.ReadPassword(fd)
+	confirmBytes, err := util.ReadSecretPassword(fd)
 	if err != nil {
 		fmt.Println()
 		return fmt.Errorf("reading password confirmation: %w", err)
@@ -120,8 +121,7 @@ func cmdInit() error {
 	fmt.Println("\nNow, enter your 24-word mnemonic phrase.")
 	fmt.Print("Mnemonic: ")
 
-	reader := bufio.NewReader(os.Stdin)
-	inputBytes, err := reader.ReadBytes('\n')
+	inputBytes, err := util.ReadSecretLine()
 	if err != nil {
 		return fmt.Errorf("reading input: %w", err)
 	}
@@ -134,7 +134,10 @@ func cmdInit() error {
 	fmt.Println("=== SELA VAULT INIT ===")
 	fmt.Println("Mnemonic: [HIDDEN FOR SECURITY]")
 
-	mnemonicBytes := bytes.TrimSpace(inputBytes)
+	// Normalize mnemonic: collapse multiple spaces/tabs into a single space (BIP-39 standard)
+	words := bytes.Fields(inputBytes)
+	mnemonicBytes := bytes.Join(words, []byte(" "))
+	defer util.WipeBytes(mnemonicBytes)
 
 	// 3. Validation & Encryption (Immediate processing)
 	fmt.Println("\nValidating Mnemonic (Checksum & Integrity)...")
@@ -172,7 +175,7 @@ func cmdAddr(isTestnet bool, accountIdx uint32) error {
 
 	// Ask for optional BIP-39 passphrase (Hidden)
 	fmt.Print("Enter passphrase (25th word) [Hidden] [Optional]: ")
-	passphraseBytes, err := term.ReadPassword(fd)
+	passphraseBytes, err := util.ReadSecretPassword(fd)
 	if err != nil {
 		fmt.Println()
 		return fmt.Errorf("reading passphrase: %w", err)
@@ -182,7 +185,7 @@ func cmdAddr(isTestnet bool, accountIdx uint32) error {
 
 	// Ask for vault password (Hidden)
 	fmt.Print("Enter vault password (hidden): ")
-	vaultPass, err := term.ReadPassword(fd)
+	vaultPass, err := util.ReadSecretPassword(fd)
 	if err != nil {
 		fmt.Println()
 		return fmt.Errorf("reading vault password: %w", err)
@@ -238,7 +241,7 @@ func cmdPair(isTestnet bool, accountIdx uint32) error {
 
 	// Ask for optional BIP-39 passphrase (Hidden)
 	fmt.Print("Enter passphrase (25th word) [Hidden] [Optional]: ")
-	passphraseBytes, err := term.ReadPassword(fd)
+	passphraseBytes, err := util.ReadSecretPassword(fd)
 	if err != nil {
 		fmt.Println()
 		return fmt.Errorf("reading passphrase: %w", err)
@@ -248,7 +251,7 @@ func cmdPair(isTestnet bool, accountIdx uint32) error {
 
 	// Ask for vault password (Hidden)
 	fmt.Print("Enter vault password (hidden): ")
-	vaultPass, err := term.ReadPassword(fd)
+	vaultPass, err := util.ReadSecretPassword(fd)
 	if err != nil {
 		fmt.Println()
 		return fmt.Errorf("reading vault password: %w", err)
@@ -307,7 +310,7 @@ func cmdPair(isTestnet bool, accountIdx uint32) error {
 
 // cmdSign parses, verifies, and signs a PSBT transaction.
 // It prioritizes security by deferring decryption until the user authorizes the transaction.
-func cmdSign(isTestnet bool, accountIdx uint32) error {
+func cmdSign(isTestnet bool, accountIdx uint32, allowMissingUtxo bool) error {
 	fmt.Println("=== SELA VAULT TRANSACTION SIGNING ===")
 
 	// Load Vault first (Fail-fast UX)
@@ -318,8 +321,7 @@ func cmdSign(isTestnet bool, accountIdx uint32) error {
 
 	// Read PSBT input
 	fmt.Println("Please paste your Base64 or UR:CRYPTO-PSBT transaction payload:")
-	reader := bufio.NewReader(os.Stdin)
-	inputBytes, err := reader.ReadBytes('\n')
+	inputBytes, err := util.ReadSecretLine()
 	if err != nil {
 		return fmt.Errorf("reading input: %w", err)
 	}
@@ -332,7 +334,7 @@ func cmdSign(isTestnet bool, accountIdx uint32) error {
 	}
 
 	// Extract transaction details for verification
-	details, err := extractTxDetails(p, isTestnet, accountIdx)
+	details, err := extractTxDetails(p, isTestnet, accountIdx, allowMissingUtxo)
 	if err != nil {
 		return err
 	}
@@ -349,6 +351,10 @@ func cmdSign(isTestnet bool, accountIdx uint32) error {
 	}
 	fmt.Printf("\nMiner Fee:    %.8f BTC (%.1f sat/B)\n", float64(details.MinerFee)/1e8, details.FeeRate)
 
+	if details.RBFEnabled {
+		fmt.Println("\n\033[33m⚠️  RBF ENABLED: This transaction uses Replace-By-Fee and can be replaced before confirmation.\033[0m")
+	}
+
 	// Authorize with Random 5-character code
 	confirmCode := util.GenerateConfirmCode()
 	fmt.Printf("\nType the random code '%s' to authorize signing: ", confirmCode)
@@ -361,7 +367,7 @@ func cmdSign(isTestnet bool, accountIdx uint32) error {
 	// Decrypt Vault (Prompted at the very end to minimize RAM lifetime of keys)
 	fd := int(os.Stdin.Fd())
 	fmt.Print("Enter passphrase (25th word) [Hidden] [Optional]: ")
-	passphraseBytes, err := term.ReadPassword(fd)
+	passphraseBytes, err := util.ReadSecretPassword(fd)
 	if err != nil {
 		fmt.Println()
 		return fmt.Errorf("reading passphrase: %w", err)
@@ -370,7 +376,7 @@ func cmdSign(isTestnet bool, accountIdx uint32) error {
 	fmt.Println()
 
 	fmt.Print("Enter vault password (hidden): ")
-	vaultPass, err := term.ReadPassword(fd)
+	vaultPass, err := util.ReadSecretPassword(fd)
 	if err != nil {
 		fmt.Println()
 		return fmt.Errorf("reading vault password: %w", err)
@@ -410,7 +416,7 @@ func cmdSign(isTestnet bool, accountIdx uint32) error {
 	defer masterKey.Zero()
 
 	// Sign Inputs
-	signedCount, err := signTransactionInputs(p, masterKey, netParams, isTestnet, accountIdx)
+	signedCount, err := signTransactionInputs(p, masterKey, netParams, isTestnet, accountIdx, details)
 	masterKey.Zero() // Zero master key immediately after signing is completed to minimize RAM lifetime
 	if err != nil {
 		return err

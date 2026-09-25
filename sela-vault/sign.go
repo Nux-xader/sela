@@ -170,10 +170,11 @@ type TxDetails struct {
 	ChangeOuts    []string
 	MinerFee      int64
 	FeeRate       float64
+	RBFEnabled    bool
 }
 
 // extractTxDetails parses and extracts verification information from a PSBT packet.
-func extractTxDetails(p *psbt.Packet, isTestnet bool, accountIdx uint32) (*TxDetails, error) {
+func extractTxDetails(p *psbt.Packet, isTestnet bool, accountIdx uint32, allowMissingUtxo bool) (*TxDetails, error) {
 	var netParams *chaincfg.Params
 	if isTestnet {
 		netParams = &chaincfg.TestNet3Params
@@ -197,8 +198,11 @@ func extractTxDetails(p *psbt.Packet, isTestnet bool, accountIdx uint32) (*TxDet
 					return nil, errors.New("CRITICAL SECURITY WARNING: Fake NonWitnessUtxo provided! TxHash does not match Outpoint!")
 				}
 			} else {
-				// Hybrid Mode: Warn instead of hard-failing to allow compact base64/QR usage
-				fmt.Printf("\033[31m⚠️  SECURITY WARNING: Missing NonWitnessUtxo for SegWit input %d! Amount cannot be verified.\033[0m\n", inIdx)
+				if allowMissingUtxo {
+					fmt.Printf("\033[31m⚠️  SECURITY WARNING: Missing NonWitnessUtxo for SegWit input %d! Amount cannot be verified.\033[0m\n", inIdx)
+				} else {
+					return nil, fmt.Errorf("CRITICAL SECURITY WARNING: Missing NonWitnessUtxo for SegWit input %d! Vulnerable to Fake WitnessUtxo Attack! Use --allow-missing-utxo to override (less secure)", inIdx)
+				}
 			}
 			if in.WitnessUtxo.Value < 0 || in.WitnessUtxo.Value > 21000000*100000000 {
 				return nil, errors.New("CRITICAL SECURITY WARNING: Invalid WitnessUtxo value (negative or exceeds max supply)!")
@@ -211,6 +215,14 @@ func extractTxDetails(p *psbt.Packet, isTestnet bool, accountIdx uint32) (*TxDet
 
 	if totalInput < 0 || totalInput > 21000000*100000000 {
 		return nil, errors.New("CRITICAL SECURITY WARNING: Total input value exceeds maximum possible supply!")
+	}
+
+	rbfEnabled := false
+	for _, txIn := range p.UnsignedTx.TxIn {
+		if txIn.Sequence < 0xfffffffe {
+			rbfEnabled = true
+			break
+		}
 	}
 
 	var totalOutput int64 = 0
@@ -256,6 +268,7 @@ func extractTxDetails(p *psbt.Packet, isTestnet bool, accountIdx uint32) (*TxDet
 		ChangeOuts:    changeOuts,
 		MinerFee:      minerFee,
 		FeeRate:       feeRate,
+		RBFEnabled:    rbfEnabled,
 	}, nil
 }
 
@@ -435,7 +448,7 @@ func signSingleInput(p *psbt.Packet, inputIdx int, masterKey *hdkeychain.Extende
 
 // signTransactionInputs is the main entry point for signing a PSBT.
 // It orchestrates security verification and delegates signing of inputs.
-func signTransactionInputs(p *psbt.Packet, masterKey *hdkeychain.ExtendedKey, netParams *chaincfg.Params, isTestnet bool, accountIdx uint32) (int, error) {
+func signTransactionInputs(p *psbt.Packet, masterKey *hdkeychain.ExtendedKey, netParams *chaincfg.Params, isTestnet bool, accountIdx uint32, txDetails *TxDetails) (int, error) {
 	// Get the 4-byte master fingerprint for our seed
 	derivedMasterFP, err := getMasterFingerprint(masterKey)
 	if err != nil {
@@ -468,11 +481,7 @@ func signTransactionInputs(p *psbt.Packet, masterKey *hdkeychain.ExtendedKey, ne
 		return 0, fmt.Errorf("CRITICAL SECURITY WARNING: Transaction too complex! Sela Vault strictly limits transactions to 20 inputs and 20 outputs to prevent DoS/Spam attacks.")
 	}
 
-	// Extract details and perform Fee Sniping check
-	txDetails, err := extractTxDetails(p, isTestnet, accountIdx)
-	if err != nil {
-		return 0, err
-	}
+	// Perform Fee Sniping check
 	if txDetails.MinerFee < 0 {
 		return 0, fmt.Errorf("CRITICAL SECURITY WARNING: Invalid transaction detected! Total outputs exceed total inputs.")
 	}
