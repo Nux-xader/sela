@@ -15,10 +15,10 @@ import (
 
 // Constants for crypto parameters
 const (
-	KDFTime        = 1          // Number of passes/iterations
-	KDFMemory      = 512 * 1024 // 512 MB in KiB (maximum standard option)
-	KDFThreads     = 4          // Parallelism (number of threads)
-	SaltSize       = 64         // Increased to 64 bytes (512 bits) to match SHA-512 output & hedge against weak RNG
+	KDFTime        = 1           // Number of passes/iterations
+	KDFMemory      = 1024 * 1024 // 1024 MB in KiB (extreme memory-hardness)
+	KDFThreads     = 4           // Parallelism (number of threads)
+	SaltSize       = 64          // Increased to 64 bytes (512 bits) to match SHA-512 output & hedge against weak RNG
 	NonceSize      = 12
 	KeySize        = 32
 	KDFAlgo        = "argon2id"
