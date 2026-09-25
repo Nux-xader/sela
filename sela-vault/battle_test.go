@@ -13,6 +13,7 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -24,8 +25,8 @@ import (
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
 	"github.com/btcsuite/btcd/btcutil/psbt"
 	"github.com/btcsuite/btcd/chaincfg"
+	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
-	"strings"
 )
 
 // RPCClient simplifies bitcoind RPC calls
@@ -39,8 +40,8 @@ func newRPCClient(url, user, pass string) *RPCClient {
 	return &RPCClient{url: url, user: user, pass: pass}
 }
 
-func (c *RPCClient) Call(method string, params []interface{}) (json.RawMessage, error) {
-	reqBody := map[string]interface{}{
+func (c *RPCClient) Call(method string, params []any) (json.RawMessage, error) {
+	reqBody := map[string]any{
 		"jsonrpc": "1.0",
 		"id":      "sela",
 		"method":  method,
@@ -81,18 +82,59 @@ func (c *RPCClient) Call(method string, params []interface{}) (json.RawMessage, 
 var rpcFundingMutex sync.Mutex
 
 // txCounter tracks how many funding rounds have happened to trigger periodic maturation mining
-var txCounter int64
+var txCounter atomic.Int64
 
-// generateRandomMnemonic creates a mock mnemonic using random strings.
+var (
+	cachedWordlist     []string
+	cachedWordlistOnce sync.Once
+)
+
+func findBattleWordlistPath() string {
+	candidates := []string{
+		"../bip-39-english.txt",
+		"bip-39-english.txt",
+	}
+	for _, p := range candidates {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return ""
+}
+
+func getBIP39Words() []string {
+	cachedWordlistOnce.Do(func() {
+		if path := findBattleWordlistPath(); path != "" {
+			words, err := bip.LoadWordlist(path)
+			if err == nil && len(words) == 2048 {
+				cachedWordlist = words
+			}
+		}
+	})
+	return cachedWordlist
+}
+
+// generateRandomMnemonic creates a mock mnemonic using real BIP-39 words when available.
 func generateRandomMnemonic(wordCount int) string {
+	wordsPool := getBIP39Words()
 	var words []string
-	for i := 0; i < wordCount; i++ {
-		words = append(words, fmt.Sprintf("word%d", rand.Intn(100000)))
+	if len(wordsPool) == 2048 {
+		for range wordCount {
+			words = append(words, wordsPool[rand.Intn(len(wordsPool))])
+		}
+	} else {
+		for range wordCount {
+			words = append(words, fmt.Sprintf("word%d", rand.Intn(100000)))
+		}
 	}
 	return strings.Join(words, " ")
 }
 
 func TestRegtestBattle(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping Regtest battle in short mode.")
+	}
+
 	rpcUser := os.Getenv("BTC_RPC_USER")
 	rpcPass := os.Getenv("BTC_RPC_PASS")
 	rpcURL := os.Getenv("BTC_RPC_URL")
@@ -107,17 +149,17 @@ func TestRegtestBattle(t *testing.T) {
 	rpc := newRPCClient(rpcURL, rpcUser, rpcPass)
 
 	// 1. Ensure node is ready and we have funds
-	_, err := rpc.Call("getblockchaininfo", []interface{}{})
+	_, err := rpc.Call("getblockchaininfo", []any{})
 	if err != nil {
 		t.Fatalf("Failed to connect to bitcoind: %v", err)
 	}
 
 	// Make sure a wallet is loaded for the faucet
 	var wallets []string
-	walletsRes, _ := rpc.Call("listwallets", []interface{}{})
+	walletsRes, _ := rpc.Call("listwallets", []any{})
 	json.Unmarshal(walletsRes, &wallets)
 	if len(wallets) == 0 {
-		_, err = rpc.Call("createwallet", []interface{}{"faucet"})
+		_, err = rpc.Call("createwallet", []any{"faucet"})
 		if err != nil {
 			t.Fatalf("Failed to create faucet wallet: %v", err)
 		}
@@ -140,14 +182,14 @@ func TestRegtestBattle(t *testing.T) {
 
 	// Calculate how many blocks we need to fund the entire battle depth.
 	// 1 block = 50 BTC. Each scenario might spend up to 100 BTC (2 blocks).
-	// We need 100 blocks just for maturity.
-	blocksToMine := 300 + (battleDepth * 2)
+	// We need 100.000 blocks just for maturity.
+	blocksToMine := 100_000 + (battleDepth * 5)
 
 	// Generate blocks to ensure PLENTY of mature funds
 	var faucetAddrStr string
-	addrRes, _ := rpc.Call("getnewaddress", []interface{}{})
+	addrRes, _ := rpc.Call("getnewaddress", []any{})
 	json.Unmarshal(addrRes, &faucetAddrStr)
-	rpc.Call("generatetoaddress", []interface{}{blocksToMine, faucetAddrStr})
+	rpc.Call("generatetoaddress", []any{blocksToMine, faucetAddrStr})
 
 	t.Logf("Regtest is ready! Faucet is funded with %d blocks. Preparing Matrix of %d Paths...", blocksToMine, battleDepth)
 
@@ -156,7 +198,6 @@ func TestRegtestBattle(t *testing.T) {
 	for i := 0; i < battleDepth; i++ {
 		allPaths[i] = uint32(i)
 	}
-	rand.Seed(time.Now().UnixNano())
 	rand.Shuffle(len(allPaths), func(i, j int) {
 		allPaths[i], allPaths[j] = allPaths[j], allPaths[i]
 	})
@@ -164,6 +205,7 @@ func TestRegtestBattle(t *testing.T) {
 	var wg sync.WaitGroup
 	var successCounts [17]int32
 	var failCounts [17]int32
+	var completedTx int32
 
 	scenarioNames := []string{
 		"Valid Transaction",
@@ -216,13 +258,52 @@ func TestRegtestBattle(t *testing.T) {
 				} else {
 					atomic.AddInt32(&successCounts[scenarioIdx], 1)
 				}
+				atomic.AddInt32(&completedTx, 1)
 
 				// We no longer mine blocks here because it is done securely inside the mutex
 			}
 		}(w, workerPaths)
 	}
 
-	wg.Wait()
+	doneChan := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(doneChan)
+	}()
+
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	printProgress := func(completed int, total int, start time.Time) {
+		percent := float64(completed) / float64(total) * 100
+		elapsed := time.Since(start)
+
+		var eta time.Duration
+		if completed > 0 {
+			timePerTx := elapsed / time.Duration(completed)
+			eta = timePerTx * time.Duration(total-completed)
+		}
+
+		barWidth := 40
+		filled := int(float64(barWidth) * float64(completed) / float64(total))
+		bar := strings.Repeat("█", filled) + strings.Repeat("-", barWidth-filled)
+
+		fmt.Printf("\r[%s] %.1f%% (%d/%d) | Elapsed: %v | ETA: %v  ", bar, percent, completed, total, elapsed.Round(time.Second), eta.Round(time.Second))
+	}
+
+ProgressLoop:
+	for {
+		select {
+		case <-doneChan:
+			c := int(atomic.LoadInt32(&completedTx))
+			printProgress(c, battleDepth, start)
+			fmt.Println()
+			break ProgressLoop
+		case <-ticker.C:
+			c := int(atomic.LoadInt32(&completedTx))
+			printProgress(c, battleDepth, start)
+		}
+	}
 	elapsed := time.Since(start)
 
 	totalFail := int32(0)
@@ -230,7 +311,7 @@ func TestRegtestBattle(t *testing.T) {
 	t.Logf("🛡️  BATTLE TEST COMBAT REPORT (%.2fs)", elapsed.Seconds())
 	t.Logf("Speed: %.2f TX/second", float64(battleDepth)/elapsed.Seconds())
 	t.Logf("=========================================")
-	for i := 0; i < len(scenarioNames); i++ {
+	for i := range scenarioNames {
 		status := "✅ PERFECT"
 		if failCounts[i] > 0 {
 			status = "❌ BREACHED"
@@ -282,7 +363,7 @@ func executeRandomScenario(rpc *RPCClient, primaryPath uint32) (int, error) {
 	}
 
 	// 2 & 3. DERIVE RECEIVE ADDRESSES & FUND THEM
-	var inputs []map[string]interface{}
+	var inputs []map[string]any
 	var receivePaths [][]uint32
 	var recvPubs [][]byte
 	totalIn := 0.0
@@ -320,7 +401,7 @@ func executeRandomScenario(rpc *RPCClient, primaryPath uint32) (int, error) {
 			continue
 		}
 
-		rpc.Call("importaddress", []interface{}{recvAddrStr, "", false})
+		rpc.Call("importaddress", []any{recvAddrStr, "", false})
 
 		fundAmount, _ := strconv.ParseFloat(fmt.Sprintf("%.8f", 0.1+(float64(rand.Intn(40))/100.0)), 64)
 		amounts[recvAddrStr] = fundAmount
@@ -333,44 +414,57 @@ func executeRandomScenario(rpc *RPCClient, primaryPath uint32) (int, error) {
 
 	// We MUST serialize funding to avoid Bitcoin Core's "Insufficient funds" caused by concurrent UTXO selection
 	rpcFundingMutex.Lock()
-	txidRes, err := rpc.Call("sendmany", []interface{}{"", amounts})
+	txidRes, err := rpc.Call("sendmany", []any{"", amounts})
 	if err != nil {
 		rpcFundingMutex.Unlock()
 		return attackScenario, fmt.Errorf("sendmany failed: %v", err)
 	}
 	json.Unmarshal(txidRes, &txid)
 
-	var rawTx struct {
-		Vout []struct {
-			N            int `json:"n"`
-			ScriptPubKey struct {
-				Address string `json:"address"`
-			} `json:"scriptPubKey"`
-		} `json:"vout"`
+	var txHex string
+	for attempt := range 15 {
+		txRes, txErr := rpc.Call("gettransaction", []any{txid})
+		if txErr == nil && txRes != nil {
+			var txData map[string]any
+			json.Unmarshal(txRes, &txData)
+			if h, ok := txData["hex"].(string); ok && h != "" {
+				txHex = h
+				break
+			}
+		}
+		time.Sleep(time.Duration(50+attempt*50) * time.Millisecond)
 	}
-	rawTxRes, _ := rpc.Call("getrawtransaction", []interface{}{txid, true})
+	if txHex == "" {
+		rpcFundingMutex.Unlock()
+		return attackScenario, fmt.Errorf("gettransaction failed for txid %s", txid)
+	}
 
 	// Mine a block to confirm the UTXOs and clear the mempool.
 	// Every 50 transactions, mine 100 extra blocks to keep coinbase rewards mature and the
 	// faucet balance replenished. This prevents "Insufficient funds" on very high depth runs.
 	var faucetAddrStr string
-	addrRes2, _ := rpc.Call("getnewaddress", []interface{}{})
+	addrRes2, _ := rpc.Call("getnewaddress", []any{})
 	json.Unmarshal(addrRes2, &faucetAddrStr)
-	count := atomic.AddInt64(&txCounter, 1)
+	count := txCounter.Add(1)
 	extraBlocks := 1
-	if count%50 == 0 {
+	if count%10 == 0 {
 		extraBlocks = 101 // mine 100 maturation blocks + 1 confirmation block
 	}
-	rpc.Call("generatetoaddress", []interface{}{extraBlocks, faucetAddrStr})
+	rpc.Call("generatetoaddress", []any{extraBlocks, faucetAddrStr})
 	rpcFundingMutex.Unlock()
 
-	json.Unmarshal(rawTxRes, &rawTx)
+	rawTxBytes, _ := hex.DecodeString(txHex)
+	fundedTx, _ := btcutil.NewTxFromBytes(rawTxBytes)
 
-	// Map vouts
-	for _, out := range rawTx.Vout {
-		addr := out.ScriptPubKey.Address
+	// Map vouts by decoding PkScript from raw transaction
+	for i, out := range fundedTx.MsgTx().TxOut {
+		_, addrs, _, err := txscript.ExtractPkScriptAddrs(out.PkScript, netParams)
+		if err != nil || len(addrs) == 0 {
+			continue
+		}
+		addr := addrs[0].EncodeAddress()
 		if path, exists := addrToPathMap[addr]; exists {
-			inputs = append(inputs, map[string]interface{}{"txid": txid, "vout": out.N})
+			inputs = append(inputs, map[string]any{"txid": txid, "vout": i})
 			receivePaths = append(receivePaths, path)
 			recvPubs = append(recvPubs, addrToPubMap[addr])
 		}
@@ -393,13 +487,13 @@ func executeRandomScenario(rpc *RPCClient, primaryPath uint32) (int, error) {
 		minerFee = 0.05 // High fee, but leaves enough for outputs to be created without createpsbt throwing an error
 	}
 
-	for j := 0; j < numOutputs; j++ {
+	for range numOutputs {
 		sendAmount, _ := strconv.ParseFloat(fmt.Sprintf("%.8f", 0.001+(float64(rand.Intn(5))/100.0)), 64)
 		if totalOut+sendAmount+minerFee >= totalIn {
 			break // Prevent creating invalid transactions where outputs > inputs
 		}
 		var recipient string
-		addrRes, _ := rpc.Call("getnewaddress", []interface{}{})
+		addrRes, _ := rpc.Call("getnewaddress", []any{})
 		json.Unmarshal(addrRes, &recipient)
 		outputs = append(outputs, map[string]float64{recipient: sendAmount})
 		totalOut += sendAmount
@@ -412,13 +506,13 @@ func executeRandomScenario(rpc *RPCClient, primaryPath uint32) (int, error) {
 
 	// 5. CREATE PSBT
 	var psbtB64 string
-	psbtRes, err := rpc.Call("createpsbt", []interface{}{inputs, outputs, 0, false})
+	psbtRes, err := rpc.Call("createpsbt", []any{inputs, outputs, 0, false})
 	if err != nil {
 		return attackScenario, fmt.Errorf("createpsbt failed: %v", err)
 	}
 	json.Unmarshal(psbtRes, &psbtB64)
 
-	updatedPsbtRes, err := rpc.Call("utxoupdatepsbt", []interface{}{psbtB64})
+	updatedPsbtRes, err := rpc.Call("utxoupdatepsbt", []any{psbtB64})
 	if err == nil {
 		json.Unmarshal(updatedPsbtRes, &psbtB64)
 	}
@@ -427,21 +521,22 @@ func executeRandomScenario(rpc *RPCClient, primaryPath uint32) (int, error) {
 	packet, _ := psbt.NewFromRawBytes(bytes.NewReader(decodeBase64(psbtB64)), false)
 
 	for i := range packet.Inputs {
-		// Fetch NonWitnessUtxo from bitcoind because utxoupdatepsbt might not add it for SegWit inputs!
-		txid := packet.UnsignedTx.TxIn[i].PreviousOutPoint.Hash.String()
-		rawTxHexRes, err := rpc.Call("gettransaction", []interface{}{txid})
-		if err == nil {
-			var txData map[string]interface{}
-			json.Unmarshal(rawTxHexRes, &txData)
-			if hexStr, ok := txData["hex"].(string); ok {
-				rawTxBytes, _ := hex.DecodeString(hexStr)
-				nonWitnessUtxo, _ := btcutil.NewTxFromBytes(rawTxBytes)
-				packet.Inputs[i].NonWitnessUtxo = nonWitnessUtxo.MsgTx()
-			} else {
-				fmt.Printf("gettransaction returned no hex\n")
-			}
+		// Populate NonWitnessUtxo directly from in-memory fundedTx when available, avoiding redundant RPC
+		inHash := packet.UnsignedTx.TxIn[i].PreviousOutPoint.Hash
+		if fundedTx != nil && inHash == fundedTx.MsgTx().TxHash() {
+			packet.Inputs[i].NonWitnessUtxo = fundedTx.MsgTx()
 		} else {
-			fmt.Printf("gettransaction failed: %v\n", err)
+			txid := inHash.String()
+			rawTxHexRes, err := rpc.Call("gettransaction", []any{txid})
+			if err == nil {
+				var txData map[string]any
+				json.Unmarshal(rawTxHexRes, &txData)
+				if hexStr, ok := txData["hex"].(string); ok {
+					rawTxBytes, _ := hex.DecodeString(hexStr)
+					nonWitnessUtxo, _ := btcutil.NewTxFromBytes(rawTxBytes)
+					packet.Inputs[i].NonWitnessUtxo = nonWitnessUtxo.MsgTx()
+				}
+			}
 		}
 
 		packet.Inputs[i].Bip32Derivation = []*psbt.Bip32Derivation{{
@@ -468,7 +563,7 @@ func executeRandomScenario(rpc *RPCClient, primaryPath uint32) (int, error) {
 	}
 
 	if attackScenario == 10 { // Dust Spam Attack
-		for k := 0; k < 50; k++ {
+		for range 50 {
 			packet.UnsignedTx.AddTxOut(&wire.TxOut{
 				Value:    500, // Dust
 				PkScript: []byte{0x00, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
@@ -479,7 +574,7 @@ func executeRandomScenario(rpc *RPCClient, primaryPath uint32) (int, error) {
 
 	if attackScenario == 12 { // OOM DoS Bomb Attack
 		// Duplicate the first input and output 5000 times to stress test memory
-		for k := 0; k < 5000; k++ {
+		for range 5000 {
 			packet.UnsignedTx.AddTxIn(packet.UnsignedTx.TxIn[0])
 			packet.Inputs = append(packet.Inputs, packet.Inputs[0])
 			packet.UnsignedTx.AddTxOut(packet.UnsignedTx.TxOut[0])
@@ -538,7 +633,10 @@ func executeRandomScenario(rpc *RPCClient, primaryPath uint32) (int, error) {
 	psbtB64 = base64.StdEncoding.EncodeToString(b.Bytes())
 
 	// 6. SELA VAULT SIGNING
-	_, err = signTransactionInputs(packet, masterKey, netParams, true, accountIdx)
+	txDetails, err := extractTxDetails(packet, true, accountIdx, true)
+	if err == nil {
+		_, err = signTransactionInputs(packet, masterKey, netParams, true, accountIdx, txDetails)
+	}
 
 	attackName := ""
 	switch attackScenario {
@@ -579,7 +677,7 @@ func executeRandomScenario(rpc *RPCClient, primaryPath uint32) (int, error) {
         Num Inputs:     %d (Total: %.8f BTC)
         Num Outputs:    %d (Total: %.8f BTC)
         Miner Fee:      %.8f BTC
-        Raw PSBT (B64): 
+        Raw PSBT (B64):
         %s
         -------------------------`, mnemonic, passphrase, accountIdx, attackName, numInputs, totalIn, numOutputs, totalOut, totalIn-totalOut-changeAmount, psbtB64)
 
@@ -588,7 +686,11 @@ func executeRandomScenario(rpc *RPCClient, primaryPath uint32) (int, error) {
 			return attackScenario, fmt.Errorf("Deterministic Signature Anti-Klepto Test failed to sign: %v\n%s", err, dumpData)
 		}
 		// Sign again
-		_, err2 := signTransactionInputs(packet, masterKey, netParams, true, accountIdx)
+		txDetails2, err2 := extractTxDetails(packet, true, accountIdx, true)
+		if err2 != nil {
+			return attackScenario, fmt.Errorf("Deterministic Signature Test failed to extract TxDetails: %v\n%s", err2, dumpData)
+		}
+		_, err2 = signTransactionInputs(packet, masterKey, netParams, true, accountIdx, txDetails2)
 		if err2 != nil {
 			return attackScenario, fmt.Errorf("Deterministic Signature Test failed on second sign: %v\n%s", err2, dumpData)
 		}

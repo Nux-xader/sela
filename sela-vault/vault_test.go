@@ -2,7 +2,10 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/binary"
+	"hash/crc32"
+	"os"
 	"strings"
 	"testing"
 
@@ -246,7 +249,11 @@ func TestPSBTSecureSigning(t *testing.T) {
 	}
 
 	// Test case A: Valid change output (should succeed)
-	signedCount, err := signTransactionInputs(p, masterKey, netParams, true, 0)
+	txDetails, err := extractTxDetails(p, true, 0, false)
+	if err != nil {
+		t.Fatalf("Failed to extract TxDetails: %v", err)
+	}
+	signedCount, err := signTransactionInputs(p, masterKey, netParams, true, 0, txDetails)
 	if err != nil {
 		t.Errorf("Signing valid PSBT failed: %v", err)
 	}
@@ -262,7 +269,11 @@ func TestPSBTSecureSigning(t *testing.T) {
 	attackerPkScript := []byte{0x00, 0x14, 0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef}
 	p.UnsignedTx.TxOut[0].PkScript = attackerPkScript
 
-	_, err = signTransactionInputs(p, masterKey, netParams, true, 0)
+	txDetails, err = extractTxDetails(p, true, 0, false)
+	if err != nil {
+		t.Fatalf("Failed to extract TxDetails: %v", err)
+	}
+	_, err = signTransactionInputs(p, masterKey, netParams, true, 0, txDetails)
 	if err == nil {
 		t.Error("Expected Fake Change transaction to fail, but it succeeded")
 	} else if !strings.Contains(err.Error(), "CRITICAL SECURITY WARNING") {
@@ -274,10 +285,519 @@ func TestPSBTSecureSigning(t *testing.T) {
 	p.UnsignedTx.TxOut[0].PkScript = changePkScript // Restore valid script
 	p.Inputs[0].SighashType = txscript.SigHashNone
 
-	_, err = signTransactionInputs(p, masterKey, netParams, true, 0)
+	txDetails, err = extractTxDetails(p, true, 0, false)
+	if err != nil {
+		t.Fatalf("Failed to extract TxDetails: %v", err)
+	}
+	_, err = signTransactionInputs(p, masterKey, netParams, true, 0, txDetails)
 	if err == nil {
 		t.Error("Expected Sighash Manipulation transaction to fail, but it succeeded")
 	} else if !strings.Contains(err.Error(), "CRITICAL SECURITY WARNING") || !strings.Contains(err.Error(), "dangerous SighashType") {
 		t.Errorf("Expected Sighash security warning error, got: %v", err)
+	}
+}
+
+func TestExtractTxDetails_AllowMissingUtxo(t *testing.T) {
+	// Setup: Create a PSBT with WitnessUtxo but NO NonWitnessUtxo
+	mnemonic := []byte("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about")
+	seed := bip.MnemonicToSeed(mnemonic, nil)
+	netParams := &chaincfg.TestNet3Params
+
+	masterKey, err := hdkeychain.NewMaster(seed, netParams)
+	if err != nil {
+		t.Fatalf("Failed to create master key: %v", err)
+	}
+	defer masterKey.Zero()
+
+	masterPub, err := masterKey.ECPubKey()
+	if err != nil {
+		t.Fatalf("Failed to get master pubkey: %v", err)
+	}
+	derivedMasterFP := binary.LittleEndian.Uint32(btcutil.Hash160(masterPub.SerializeCompressed())[:4])
+
+	// Derive input key (m/84'/1'/0'/0/0)
+	inputPath := []uint32{
+		84 + hdkeychain.HardenedKeyStart,
+		1 + hdkeychain.HardenedKeyStart,
+		0 + hdkeychain.HardenedKeyStart,
+		0,
+		0,
+	}
+	inputKey, err := derivePath(masterKey, inputPath)
+	if err != nil {
+		t.Fatalf("Failed to derive input key: %v", err)
+	}
+	inputPub, err := inputKey.ECPubKey()
+	inputPubBytes := inputPub.SerializeCompressed()
+
+	// Derive change key (m/84'/1'/0'/1/0)
+	changePath := []uint32{
+		84 + hdkeychain.HardenedKeyStart,
+		1 + hdkeychain.HardenedKeyStart,
+		0 + hdkeychain.HardenedKeyStart,
+		1,
+		0,
+	}
+	changeKey, err := derivePath(masterKey, changePath)
+	if err != nil {
+		t.Fatalf("Failed to derive change key: %v", err)
+	}
+	changePub, err := changeKey.ECPubKey()
+	changePubHash := btcutil.Hash160(changePub.SerializeCompressed())
+	changeAddr, err := btcutil.NewAddressWitnessPubKeyHash(changePubHash, netParams)
+	if err != nil {
+		t.Fatalf("Failed to create change address: %v", err)
+	}
+	changePkScript, err := txscript.PayToAddrScript(changeAddr)
+	if err != nil {
+		t.Fatalf("Failed to create change pkscript: %v", err)
+	}
+
+	// Construct unsigned transaction
+	tx := wire.NewMsgTx(2)
+	tx.AddTxIn(wire.NewTxIn(&wire.OutPoint{
+		Hash:  chainhash.Hash{},
+		Index: 0,
+	}, nil, nil))
+	tx.AddTxOut(wire.NewTxOut(100000, changePkScript))
+
+	// Create PSBT
+	p, err := psbt.NewFromUnsignedTx(tx)
+	if err != nil {
+		t.Fatalf("Failed to create PSBT: %v", err)
+	}
+
+	// Populate input BIP32 derivation
+	p.Inputs[0].Bip32Derivation = []*psbt.Bip32Derivation{
+		{
+			PubKey:               inputPubBytes,
+			MasterKeyFingerprint: derivedMasterFP,
+			Bip32Path:            inputPath,
+		},
+	}
+
+	// Add witness UTXO for the input (value = 150000 sat)
+	inputPubHash := btcutil.Hash160(inputPubBytes)
+	inputAddr, err := btcutil.NewAddressWitnessPubKeyHash(inputPubHash, netParams)
+	if err != nil {
+		t.Fatalf("Failed to create input address: %v", err)
+	}
+	inputPkScript, err := txscript.PayToAddrScript(inputAddr)
+	if err != nil {
+		t.Fatalf("Failed to create input pkscript: %v", err)
+	}
+	p.Inputs[0].WitnessUtxo = &wire.TxOut{
+		Value:    150000,
+		PkScript: inputPkScript,
+	}
+	// NOTE: Intentionally NOT setting NonWitnessUtxo to test allowMissingUtxo
+
+	// Populate output BIP32 derivation
+	p.Outputs[0].Bip32Derivation = []*psbt.Bip32Derivation{
+		{
+			PubKey:               changePub.SerializeCompressed(),
+			MasterKeyFingerprint: derivedMasterFP,
+			Bip32Path:            changePath,
+		},
+	}
+
+	// Test case A: allowMissingUtxo=false should FAIL
+	_, err = extractTxDetails(p, true, 0, false)
+	if err == nil {
+		t.Error("Expected extractTxDetails to fail with allowMissingUtxo=false and missing NonWitnessUtxo")
+	} else if !strings.Contains(err.Error(), "CRITICAL SECURITY WARNING") || !strings.Contains(err.Error(), "Missing NonWitnessUtxo") {
+		t.Errorf("Expected missing NonWitnessUtxo security warning, got: %v", err)
+	}
+
+	// Test case B: allowMissingUtxo=true should SUCCEED
+	txDetails, err := extractTxDetails(p, true, 0, true)
+	if err != nil {
+		t.Errorf("Expected extractTxDetails to succeed with allowMissingUtxo=true, got: %v", err)
+	}
+	if txDetails != nil && txDetails.TotalInput != 150000 {
+		t.Errorf("Expected TotalInput=150000, got %d", txDetails.TotalInput)
+	}
+}
+
+func TestExtractTxDetails_RBFDetection(t *testing.T) {
+	// Setup: Create a minimal PSBT to test RBF detection logic
+	mnemonic := []byte("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about")
+	seed := bip.MnemonicToSeed(mnemonic, nil)
+	netParams := &chaincfg.TestNet3Params
+
+	masterKey, err := hdkeychain.NewMaster(seed, netParams)
+	if err != nil {
+		t.Fatalf("Failed to create master key: %v", err)
+	}
+	defer masterKey.Zero()
+
+	masterPub, err := masterKey.ECPubKey()
+	if err != nil {
+		t.Fatalf("Failed to get master pubkey: %v", err)
+	}
+	derivedMasterFP := binary.LittleEndian.Uint32(btcutil.Hash160(masterPub.SerializeCompressed())[:4])
+
+	// Derive input key (m/84'/1'/0'/0/0)
+	inputPath := []uint32{
+		84 + hdkeychain.HardenedKeyStart,
+		1 + hdkeychain.HardenedKeyStart,
+		0 + hdkeychain.HardenedKeyStart,
+		0,
+		0,
+	}
+	inputKey, err := derivePath(masterKey, inputPath)
+	if err != nil {
+		t.Fatalf("Failed to derive input key: %v", err)
+	}
+	inputPub, err := inputKey.ECPubKey()
+	inputPubBytes := inputPub.SerializeCompressed()
+
+	// Derive change key (m/84'/1'/0'/1/0)
+	changePath := []uint32{
+		84 + hdkeychain.HardenedKeyStart,
+		1 + hdkeychain.HardenedKeyStart,
+		0 + hdkeychain.HardenedKeyStart,
+		1,
+		0,
+	}
+	changeKey, err := derivePath(masterKey, changePath)
+	if err != nil {
+		t.Fatalf("Failed to derive change key: %v", err)
+	}
+	changePub, err := changeKey.ECPubKey()
+	changePubHash := btcutil.Hash160(changePub.SerializeCompressed())
+	changeAddr, err := btcutil.NewAddressWitnessPubKeyHash(changePubHash, netParams)
+	if err != nil {
+		t.Fatalf("Failed to create change address: %v", err)
+	}
+	changePkScript, err := txscript.PayToAddrScript(changeAddr)
+	if err != nil {
+		t.Fatalf("Failed to create change pkscript: %v", err)
+	}
+
+	// Helper function to create PSBT with specific sequence
+	createPSBT := func(sequence uint32) *psbt.Packet {
+		tx := wire.NewMsgTx(2)
+		tx.AddTxIn(wire.NewTxIn(&wire.OutPoint{
+			Hash:  chainhash.Hash{},
+			Index: 0,
+		}, nil, nil))
+		tx.TxIn[0].Sequence = sequence
+		tx.AddTxOut(wire.NewTxOut(100000, changePkScript))
+
+		p, err := psbt.NewFromUnsignedTx(tx)
+		if err != nil {
+			t.Fatalf("Failed to create PSBT: %v", err)
+		}
+
+		p.Inputs[0].Bip32Derivation = []*psbt.Bip32Derivation{
+			{
+				PubKey:               inputPubBytes,
+				MasterKeyFingerprint: derivedMasterFP,
+				Bip32Path:            inputPath,
+			},
+		}
+
+		inputPubHash := btcutil.Hash160(inputPubBytes)
+		inputAddr, err := btcutil.NewAddressWitnessPubKeyHash(inputPubHash, netParams)
+		if err != nil {
+			t.Fatalf("Failed to create input address: %v", err)
+		}
+		inputPkScript, err := txscript.PayToAddrScript(inputAddr)
+		if err != nil {
+			t.Fatalf("Failed to create input pkscript: %v", err)
+		}
+		p.Inputs[0].WitnessUtxo = &wire.TxOut{
+			Value:    150000,
+			PkScript: inputPkScript,
+		}
+
+		dummyTx := wire.NewMsgTx(2)
+		dummyTx.AddTxOut(&wire.TxOut{
+			Value:    150000,
+			PkScript: inputPkScript,
+		})
+		p.Inputs[0].NonWitnessUtxo = dummyTx
+		p.UnsignedTx.TxIn[0].PreviousOutPoint.Hash = dummyTx.TxHash()
+		p.UnsignedTx.TxIn[0].PreviousOutPoint.Index = 0
+
+		p.Outputs[0].Bip32Derivation = []*psbt.Bip32Derivation{
+			{
+				PubKey:               changePub.SerializeCompressed(),
+				MasterKeyFingerprint: derivedMasterFP,
+				Bip32Path:            changePath,
+			},
+		}
+
+		return p
+	}
+
+	// Test case A: sequence = 0xffffffff (RBF disabled, final)
+	p := createPSBT(0xffffffff)
+	txDetails, err := extractTxDetails(p, true, 0, false)
+	if err != nil {
+		t.Fatalf("extractTxDetails failed: %v", err)
+	}
+	if txDetails.RBFEnabled {
+		t.Error("Expected RBF=false for sequence=0xffffffff (final transaction)")
+	}
+
+	// Test case B: sequence = 0xfffffffe (RBF disabled, opt-in RBF not set)
+	p = createPSBT(0xfffffffe)
+	txDetails, err = extractTxDetails(p, true, 0, false)
+	if err != nil {
+		t.Fatalf("extractTxDetails failed: %v", err)
+	}
+	if txDetails.RBFEnabled {
+		t.Error("Expected RBF=false for sequence=0xfffffffe (BIP 125 opt-in not set)")
+	}
+
+	// Test case C: sequence = 0xfffffffd (RBF enabled, BIP 125 opt-in)
+	p = createPSBT(0xfffffffd)
+	txDetails, err = extractTxDetails(p, true, 0, false)
+	if err != nil {
+		t.Fatalf("extractTxDetails failed: %v", err)
+	}
+	if !txDetails.RBFEnabled {
+		t.Error("Expected RBF=true for sequence=0xfffffffd (BIP 125 opt-in set)")
+	}
+
+	// Test case D: sequence = 0x00000000 (RBF enabled, lower value)
+	p = createPSBT(0x00000000)
+	txDetails, err = extractTxDetails(p, true, 0, false)
+	if err != nil {
+		t.Fatalf("extractTxDetails failed: %v", err)
+	}
+	if !txDetails.RBFEnabled {
+		t.Error("Expected RBF=true for sequence=0x00000000 (lower than 0xfffffffe)")
+	}
+
+	// Test case E: Multiple inputs - only one needs RBF to enable it
+	tx := wire.NewMsgTx(2)
+	tx.AddTxIn(wire.NewTxIn(&wire.OutPoint{Hash: chainhash.Hash{}, Index: 0}, nil, nil))
+	tx.AddTxIn(wire.NewTxIn(&wire.OutPoint{Hash: chainhash.Hash{}, Index: 1}, nil, nil))
+	tx.TxIn[0].Sequence = 0xffffffff // Final
+	tx.TxIn[1].Sequence = 0xfffffffd // RBF
+	tx.AddTxOut(wire.NewTxOut(100000, changePkScript))
+
+	p, err = psbt.NewFromUnsignedTx(tx)
+	if err != nil {
+		t.Fatalf("Failed to create PSBT: %v", err)
+	}
+
+	// Populate both inputs
+	for i := 0; i < 2; i++ {
+		p.Inputs[i].Bip32Derivation = []*psbt.Bip32Derivation{
+			{
+				PubKey:               inputPubBytes,
+				MasterKeyFingerprint: derivedMasterFP,
+				Bip32Path:            inputPath,
+			},
+		}
+		inputPubHash := btcutil.Hash160(inputPubBytes)
+		inputAddr, _ := btcutil.NewAddressWitnessPubKeyHash(inputPubHash, netParams)
+		inputPkScript, _ := txscript.PayToAddrScript(inputAddr)
+		p.Inputs[i].WitnessUtxo = &wire.TxOut{
+			Value:    150000,
+			PkScript: inputPkScript,
+		}
+		dummyTx := wire.NewMsgTx(2)
+		dummyTx.AddTxOut(&wire.TxOut{Value: 150000, PkScript: inputPkScript})
+		p.Inputs[i].NonWitnessUtxo = dummyTx
+		p.UnsignedTx.TxIn[i].PreviousOutPoint.Hash = dummyTx.TxHash()
+		p.UnsignedTx.TxIn[i].PreviousOutPoint.Index = 0
+	}
+	p.Outputs[0].Bip32Derivation = []*psbt.Bip32Derivation{
+		{
+			PubKey:               changePub.SerializeCompressed(),
+			MasterKeyFingerprint: derivedMasterFP,
+			Bip32Path:            changePath,
+		},
+	}
+
+	txDetails, err = extractTxDetails(p, true, 0, false)
+	if err != nil {
+		t.Fatalf("extractTxDetails failed: %v", err)
+	}
+	if !txDetails.RBFEnabled {
+		t.Error("Expected RBF=true when one input has sequence<0xfffffffe")
+	}
+}
+
+func TestVaultSaveAndLoad(t *testing.T) {
+	// Isolate execution in a temporary directory
+	t.Chdir(t.TempDir())
+
+	// 1. File not found
+	_, err := LoadVault()
+	if err == nil || !strings.Contains(err.Error(), "vault file not found") {
+		t.Errorf("Expected vault file not found error, got: %v", err)
+	}
+
+	// 2. Encrypt and Save
+	mnemonic := []byte("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about")
+	password := []byte("secure-test-pass")
+	vault, err := EncryptMnemonic(mnemonic, password)
+	if err != nil {
+		t.Fatalf("Failed to encrypt mnemonic: %v", err)
+	}
+
+	if err := vault.Save(); err != nil {
+		t.Fatalf("Failed to save vault: %v", err)
+	}
+
+	// 3. Load and Decrypt
+	loadedVault, err := LoadVault()
+	if err != nil {
+		t.Fatalf("Failed to load vault: %v", err)
+	}
+
+	decrypted, err := loadedVault.DecryptMnemonic(password)
+	if err != nil {
+		t.Fatalf("Failed to decrypt loaded vault: %v", err)
+	}
+	if !bytes.Equal(decrypted, mnemonic) {
+		t.Errorf("Decrypted data mismatch: got %s, want %s", string(decrypted), string(mnemonic))
+	}
+
+	// 4. Corrupted JSON file
+	if err := os.WriteFile(DefaultKeyFile, []byte("{invalid-json"), 0600); err != nil {
+		t.Fatalf("Failed to write corrupt file: %v", err)
+	}
+	_, err = LoadVault()
+	if err == nil || !strings.Contains(err.Error(), "failed to unmarshal vault data") {
+		t.Errorf("Expected unmarshal error on corrupt vault file, got: %v", err)
+	}
+}
+
+func TestBuildCryptoPSBTURAndParse(t *testing.T) {
+	// Construct a minimal valid PSBT
+	tx := wire.NewMsgTx(2)
+	tx.AddTxIn(wire.NewTxIn(&wire.OutPoint{Hash: chainhash.Hash{}, Index: 0}, nil, nil))
+	tx.AddTxOut(wire.NewTxOut(50000, []byte{0x00, 0x14, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0x00, 0xaa, 0xbb}))
+
+	p, err := psbt.NewFromUnsignedTx(tx)
+	if err != nil {
+		t.Fatalf("Failed to create PSBT: %v", err)
+	}
+
+	var rawBuf bytes.Buffer
+	if err := p.Serialize(&rawBuf); err != nil {
+		t.Fatalf("Failed to serialize PSBT: %v", err)
+	}
+	rawBytes := rawBuf.Bytes()
+
+	// 1. Build UR
+	urStr := BuildCryptoPSBTUR(rawBytes)
+	if !strings.HasPrefix(urStr, "UR:CRYPTO-PSBT/") {
+		t.Fatalf("Expected UR prefix UR:CRYPTO-PSBT/, got %s", urStr)
+	}
+
+	// 2. Parse from UR
+	parsedPacket, err := parsePSBTInput([]byte(urStr))
+	if err != nil {
+		t.Fatalf("parsePSBTInput failed to parse UR: %v", err)
+	}
+	if len(parsedPacket.UnsignedTx.TxIn) != 1 || len(parsedPacket.UnsignedTx.TxOut) != 1 {
+		t.Errorf("Parsed packet transaction structure mismatch")
+	}
+
+	// 3. Parse from Base64
+	b64Str := base64.StdEncoding.EncodeToString(rawBytes)
+	parsedFromB64, err := parsePSBTInput([]byte(b64Str))
+	if err != nil {
+		t.Fatalf("parsePSBTInput failed to parse Base64: %v", err)
+	}
+	if parsedFromB64.UnsignedTx.TxOut[0].Value != 50000 {
+		t.Errorf("Expected TxOut value 50000, got %d", parsedFromB64.UnsignedTx.TxOut[0].Value)
+	}
+
+	// 4. Parse empty input
+	_, err = parsePSBTInput([]byte("   "))
+	if err == nil || !strings.Contains(err.Error(), "empty PSBT input") {
+		t.Errorf("Expected empty input error, got: %v", err)
+	}
+
+	// 5. Parse invalid Base64
+	_, err = parsePSBTInput([]byte("not-valid-base64!@#$%^"))
+	if err == nil || !strings.Contains(err.Error(), "decoding Base64") {
+		t.Errorf("Expected decoding Base64 error, got: %v", err)
+	}
+
+	// 6. UR with invalid Bytewords
+	_, err = parsePSBTInput([]byte("UR:CRYPTO-PSBT/ZZ99"))
+	if err == nil || !strings.Contains(err.Error(), "decoding UR Bytewords") {
+		t.Errorf("Expected UR Bytewords decode error, got: %v", err)
+	}
+
+	// 7. UR payload too short (< 4 bytes)
+	shortUR := "UR:CRYPTO-PSBT/" + encodeBytewordsMinimal([]byte{0x00})
+	_, err = parsePSBTInput([]byte(shortUR))
+	if err == nil || !strings.Contains(err.Error(), "UR payload too short") {
+		t.Errorf("Expected UR payload too short error, got: %v", err)
+	}
+
+	// 8. UR invalid checksum
+	dummyPayload := []byte{0x01, 0x02, 0x03, 0x04, 0x00, 0x00, 0x00, 0x00}
+	corruptChecksumUR := "UR:CRYPTO-PSBT/" + encodeBytewordsMinimal(dummyPayload)
+	_, err = parsePSBTInput([]byte(corruptChecksumUR))
+	if err == nil || !strings.Contains(err.Error(), "invalid checksum in UR payload") {
+		t.Errorf("Expected invalid checksum error, got: %v", err)
+	}
+
+	// 9. UR missing magic bytes
+	validCRCData := []byte{0x01, 0x02, 0x03, 0x04}
+	crc := crc32.ChecksumIEEE(validCRCData)
+	withCRC := make([]byte, 8)
+	copy(withCRC, validCRCData)
+	binary.BigEndian.PutUint32(withCRC[4:], crc)
+	noMagicUR := "UR:CRYPTO-PSBT/" + encodeBytewordsMinimal(withCRC)
+	_, err = parsePSBTInput([]byte(noMagicUR))
+	if err == nil || !strings.Contains(err.Error(), "could not find PSBT magic bytes") {
+		t.Errorf("Expected could not find PSBT magic bytes error, got: %v", err)
+	}
+}
+
+func TestCBORByteString_AllLengthTiers(t *testing.T) {
+	// Tier 1: L <= 23
+	tier1 := make([]byte, 10)
+	enc1 := encodeCBORByteString(tier1)
+	if enc1[0] != 0x40+10 || len(enc1) != 11 {
+		t.Errorf("Tier 1 encoding mismatch: header=%x, len=%d", enc1[0], len(enc1))
+	}
+
+	// Tier 2: 24 <= L <= 255
+	tier2 := make([]byte, 50)
+	enc2 := encodeCBORByteString(tier2)
+	if enc2[0] != 0x58 || enc2[1] != 50 || len(enc2) != 52 {
+		t.Errorf("Tier 2 encoding mismatch: header=%x %x, len=%d", enc2[0], enc2[1], len(enc2))
+	}
+
+	// Tier 3: 256 <= L <= 65535
+	tier3 := make([]byte, 300)
+	enc3 := encodeCBORByteString(tier3)
+	if enc3[0] != 0x59 || binary.BigEndian.Uint16(enc3[1:3]) != 300 || len(enc3) != 303 {
+		t.Errorf("Tier 3 encoding mismatch: header=%x, len=%d", enc3[0], len(enc3))
+	}
+
+	// Tier 4: L > 65535
+	tier4 := make([]byte, 70000)
+	enc4 := encodeCBORByteString(tier4)
+	if enc4[0] != 0x5a || binary.BigEndian.Uint32(enc4[1:5]) != 70000 || len(enc4) != 70005 {
+		t.Errorf("Tier 4 encoding mismatch: header=%x, len=%d", enc4[0], len(enc4))
+	}
+}
+
+func TestDecodeBytewordsMinimal_InvalidCases(t *testing.T) {
+	// Odd length string
+	_, err := decodeBytewordsMinimal("ABC")
+	if err == nil || !strings.Contains(err.Error(), "invalid Bytewords Minimal length") {
+		t.Errorf("Expected odd length error, got: %v", err)
+	}
+
+	// Invalid pair not in table
+	_, err = decodeBytewordsMinimal("99")
+	if err == nil || !strings.Contains(err.Error(), "invalid Bytewords Minimal pair") {
+		t.Errorf("Expected invalid pair error, got: %v", err)
 	}
 }
