@@ -118,8 +118,8 @@ The `sela-vault` codebase relies on a **3-Layer Security Testing Pyramid** to en
       # Standard run (default 1000 transactions depth)
       BTC_RPC_USER=admin BTC_RPC_PASS=pass go test -v -tags=integration -run=TestRegtestBattle
 
-      # Deep battle test (e.g., 20000 transactions across 8 CPU threads)
-      SELA_BATTLE_DEPTH=20000 SELA_WORKERS=8 BTC_RPC_USER=admin BTC_RPC_PASS=pass go test -timeout 0 -v -tags=integration -run=TestRegtestBattle
+      # Deep battle test (e.g., 5000 transactions across 8 CPU threads)
+      SELA_BATTLE_DEPTH=5000 SELA_WORKERS=8 BTC_RPC_USER=admin BTC_RPC_PASS=pass go test -timeout 0 -v -tags=integration -run=TestRegtestBattle
       ```
 
 ---
