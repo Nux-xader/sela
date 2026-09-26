@@ -74,7 +74,7 @@ func cmdInit() error {
 
 	// 0. Load Wordlist first (Critical for validation)
 	// We do this BEFORE asking for password to ensure system is ready.
-	wordsList, err := bip.LoadWordlist("../bip-39-english.txt")
+	wordsList, err := bip.LoadWordlist("bip-39-english.txt")
 	if err != nil {
 		return fmt.Errorf("loading wordlist: %w\nMake sure 'bip-39-english.txt' is in the parent directory", err)
 	}

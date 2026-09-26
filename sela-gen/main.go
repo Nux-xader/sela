@@ -47,7 +47,7 @@ func readSecretLine() ([]byte, error) {
 	cmd := exec.Command("stty", "-echo", "-icanon")
 	cmd.Stdin = os.Stdin
 	_ = cmd.Run()
-	
+
 	// Ensure terminal is restored
 	defer func() {
 		restoreCmd := exec.Command("stty", "echo", "icanon")
@@ -65,7 +65,7 @@ func readSecretLine() ([]byte, error) {
 			if char == '\n' || char == '\r' {
 				break
 			}
-			
+
 			// Handle Backspace (127) or Ctrl+H (8)
 			if char == 127 || char == 8 {
 				if idx > 0 {
@@ -74,13 +74,13 @@ func readSecretLine() ([]byte, error) {
 				}
 				continue
 			}
-			
+
 			// Ctrl+C (3)
 			if char == 3 {
 				wipeBytes(buf)
 				return nil, fmt.Errorf("interrupted")
 			}
-			
+
 			// Ctrl+D (4)
 			if char == 4 && idx == 0 {
 				break
@@ -154,7 +154,7 @@ func generateMnemonic(entropy []byte, wordlist []string) ([]byte, error) {
 func main() {
 	fmt.Println("--- SELA: sela-gen (256-bit) ---")
 
-	wordlist, err := loadWordlist("../bip-39-english.txt")
+	wordlist, err := loadWordlist("bip-39-english.txt")
 	if err != nil {
 		fmt.Println("Error:", err)
 		os.Exit(1)
