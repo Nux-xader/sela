@@ -26,5 +26,9 @@ sela-vault/vault.sela
 .DS_Store
 Thumbs.db
 
-# Claude settings directory
-.claude/
+# Fuzz testdata
+testdata
+
+# Release builds
+**/release/
+release/
