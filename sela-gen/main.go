@@ -8,9 +8,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"runtime"
 	"strings"
+	"syscall"
+	"unsafe"
 )
 
 // --- CORE LOGIC ---
@@ -41,18 +42,35 @@ func wipeBytes(b []byte) {
 
 // readSecretLine reads a line from stdin byte-by-byte without internal buffering.
 // It returns a slice pointing to a pre-allocated buffer that can be securely wiped.
-// It uses stty to disable echo and canonical mode (Zero External Dependencies).
+// Terminal mode is set via termios ioctl directly instead of spawning `stty`,
+// so no external process lookup is needed (works under Termux/Android seccomp).
 func readSecretLine() ([]byte, error) {
-	// Disable echo and canonical mode
-	cmd := exec.Command("stty", "-echo", "-icanon")
-	cmd.Stdin = os.Stdin
-	_ = cmd.Run()
+	const (
+		tcgets = 0x5401
+		tcsets = 0x5402
+	)
+
+	fd := uintptr(os.Stdin.Fd())
+	var saved syscall.Termios
+	var raw syscall.Termios
+	restore := false
+
+	// Disable echo and canonical mode. ISIG off turns Ctrl+C into an ordinary
+	// byte (3) so it is handled below and the terminal is restored on exit.
+	if _, _, errno := syscall.Syscall6(syscall.SYS_IOCTL, fd, tcgets, uintptr(unsafe.Pointer(&saved)), 0, 0, 0); errno == 0 {
+		restore = true
+		raw = saved
+		raw.Lflag &^= syscall.ECHO | syscall.ICANON | syscall.ISIG | syscall.IEXTEN
+		raw.Cc[syscall.VMIN] = 1
+		raw.Cc[syscall.VTIME] = 0
+		_, _, _ = syscall.Syscall6(syscall.SYS_IOCTL, fd, tcsets, uintptr(unsafe.Pointer(&raw)), 0, 0, 0)
+	}
 
 	// Ensure terminal is restored
 	defer func() {
-		restoreCmd := exec.Command("stty", "echo", "icanon")
-		restoreCmd.Stdin = os.Stdin
-		_ = restoreCmd.Run()
+		if restore {
+			_, _, _ = syscall.Syscall6(syscall.SYS_IOCTL, fd, tcsets, uintptr(unsafe.Pointer(&saved)), 0, 0, 0)
+		}
 	}()
 
 	buf := make([]byte, 1024)
